@@ -15,7 +15,7 @@ import java.util.Optional;
 
 public interface BookingRepository extends JpaRepository<Booking, Long>, JpaSpecificationExecutor<Booking> {
 
-    Page<Booking> findByUserId(Long userId, Pageable pageable);
+    Page<Booking> findByUserId(String userId, Pageable pageable);
 
     @Override
     @EntityGraph(attributePaths = {"items", "payment"})

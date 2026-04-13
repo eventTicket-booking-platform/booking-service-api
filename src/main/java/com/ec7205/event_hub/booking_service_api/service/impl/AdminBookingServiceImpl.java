@@ -32,7 +32,7 @@ public class AdminBookingServiceImpl implements AdminBookingService {
             String userRole,
             BookingStatus status,
             Long eventId,
-            Long userId,
+            String userId,
             Pageable pageable
     ) {
         assertAdmin(userRole);
@@ -45,7 +45,7 @@ public class AdminBookingServiceImpl implements AdminBookingService {
         if (eventId != null) {
             specification = specification.and((root, query, cb) -> cb.equal(root.get("eventId"), eventId));
         }
-        if (userId != null) {
+        if (userId != null && !userId.isBlank()) {
             specification = specification.and((root, query, cb) -> cb.equal(root.get("userId"), userId));
         }
 

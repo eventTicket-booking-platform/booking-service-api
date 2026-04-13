@@ -54,7 +54,7 @@ public class BookingServiceImpl implements BookingService {
 
     @Override
     @Transactional(noRollbackFor = PaymentFailedException.class)
-    public CreateBookingResponse createBooking(Long userId, CreateBookingRequest request) {
+    public CreateBookingResponse createBooking(String userId, CreateBookingRequest request) {
         validateCreateRequest(userId, request);
 
         EventBookingInfoResponse eventInfo = eventServiceClient.getEventBookingInfo(request.getEventId());
@@ -81,7 +81,6 @@ public class BookingServiceImpl implements BookingService {
 
         booking.setTotalAmount(totalAmount);
 
-        // TODO Integrate distributed inventory locking and availability checks with Event Service.
         Booking savedBooking = bookingRepository.save(booking);
 
         Payment payment = simulatePayment(savedBooking, request.getPaymentMethod(), totalAmount);
@@ -98,15 +97,14 @@ public class BookingServiceImpl implements BookingService {
         savedBooking.setPayment(payment);
         Booking confirmedBooking = bookingRepository.save(savedBooking);
 
-        // TODO Publish BOOKING_CONFIRMED event for downstream notification and analytics flows.
         return bookingMapper.toCreateBookingResponse(confirmedBooking);
     }
 
     @Override
     @Transactional(readOnly = true)
-    public Page<BookingSummaryResponse> getMyBookings(Long userId, Pageable pageable) {
-        if (userId == null) {
-            throw new BadRequestException("X-User-Id header is required");
+    public Page<BookingSummaryResponse> getMyBookings(String userId, Pageable pageable) {
+        if (userId == null || userId.isBlank()) {
+            throw new BadRequestException("Authenticated user id is required");
         }
 
         return bookingRepository.findByUserId(userId, pageable)
@@ -115,7 +113,7 @@ public class BookingServiceImpl implements BookingService {
 
     @Override
     @Transactional(readOnly = true)
-    public BookingDetailResponse getBookingDetails(Long bookingId, Long userId, String userRole) {
+    public BookingDetailResponse getBookingDetails(Long bookingId, String userId, String userRole) {
         Booking booking = getBookingWithRelations(bookingId);
         assertOwnerOrAdmin(booking, userId, userRole);
         return bookingMapper.toBookingDetailResponse(booking);
@@ -123,7 +121,7 @@ public class BookingServiceImpl implements BookingService {
 
     @Override
     @Transactional
-    public ApiMessageResponse cancelBooking(Long bookingId, Long userId, String userRole) {
+    public ApiMessageResponse cancelBooking(Long bookingId, String userId, String userRole) {
         Booking booking = getBookingWithRelations(bookingId);
         assertOwnerOrAdmin(booking, userId, userRole);
 
@@ -142,15 +140,14 @@ public class BookingServiceImpl implements BookingService {
 
         bookingRepository.save(booking);
 
-        // TODO Publish BOOKING_CANCELLED event for notification and seat release workflows.
         return ApiMessageResponse.builder()
                 .message("Booking cancelled successfully")
                 .build();
     }
 
-    private void validateCreateRequest(Long userId, CreateBookingRequest request) {
-        if (userId == null) {
-            throw new BadRequestException("X-User-Id header is required");
+    private void validateCreateRequest(String userId, CreateBookingRequest request) {
+        if (userId == null || userId.isBlank()) {
+            throw new BadRequestException("Authenticated user id is required");
         }
         if (request.getTicketSelections() == null || request.getTicketSelections().isEmpty()) {
             throw new BadRequestException("At least one ticket selection is required");
@@ -198,7 +195,7 @@ public class BookingServiceImpl implements BookingService {
         return ticketTypeMap;
     }
 
-    private Booking initializeBooking(Long userId, EventBookingInfoResponse eventInfo) {
+    private Booking initializeBooking(String userId, EventBookingInfoResponse eventInfo) {
         return Booking.builder()
                 .bookingReference(generateBookingReference())
                 .userId(userId)
@@ -233,13 +230,13 @@ public class BookingServiceImpl implements BookingService {
                 .orElseThrow(() -> new ResourceNotFoundException("Booking not found for id: " + bookingId));
     }
 
-    private void assertOwnerOrAdmin(Booking booking, Long userId, String userRole) {
+    private void assertOwnerOrAdmin(Booking booking, String userId, String userRole) {
         if (isAdmin(userRole)) {
             return;
         }
 
-        if (userId == null) {
-            throw new BadRequestException("X-User-Id header is required");
+        if (userId == null || userId.isBlank()) {
+            throw new BadRequestException("Authenticated user id is required");
         }
 
         if (!booking.getUserId().equals(userId)) {

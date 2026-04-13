@@ -10,11 +10,11 @@ import org.springframework.data.domain.Pageable;
 
 public interface BookingService {
 
-    CreateBookingResponse createBooking(Long userId, CreateBookingRequest request);
+    CreateBookingResponse createBooking(String userId, CreateBookingRequest request);
 
-    Page<BookingSummaryResponse> getMyBookings(Long userId, Pageable pageable);
+    Page<BookingSummaryResponse> getMyBookings(String userId, Pageable pageable);
 
-    BookingDetailResponse getBookingDetails(Long bookingId, Long userId, String userRole);
+    BookingDetailResponse getBookingDetails(Long bookingId, String userId, String userRole);
 
-    ApiMessageResponse cancelBooking(Long bookingId, Long userId, String userRole);
+    ApiMessageResponse cancelBooking(Long bookingId, String userId, String userRole);
 }

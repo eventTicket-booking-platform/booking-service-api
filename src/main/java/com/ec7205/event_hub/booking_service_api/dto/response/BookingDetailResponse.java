@@ -20,7 +20,7 @@ public class BookingDetailResponse {
 
     private Long bookingId;
     private String bookingReference;
-    private Long userId;
+    private String userId;
     private Long eventId;
     private String eventTitle;
     private LocalDateTime eventStartDateTime;

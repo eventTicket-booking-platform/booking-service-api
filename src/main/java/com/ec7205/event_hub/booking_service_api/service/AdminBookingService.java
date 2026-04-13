@@ -12,7 +12,7 @@ public interface AdminBookingService {
             String userRole,
             BookingStatus status,
             Long eventId,
-            Long userId,
+            String userId,
             Pageable pageable
     );
 

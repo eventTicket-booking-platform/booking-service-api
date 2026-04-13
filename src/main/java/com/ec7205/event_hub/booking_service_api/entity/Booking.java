@@ -42,8 +42,8 @@ public class Booking {
     @Column(nullable = false, unique = true, length = 32)
     private String bookingReference;
 
-    @Column(nullable = false)
-    private Long userId;
+    @Column(nullable = false, length = 80)
+    private String userId;
 
     @Column(nullable = false)
     private Long eventId;
