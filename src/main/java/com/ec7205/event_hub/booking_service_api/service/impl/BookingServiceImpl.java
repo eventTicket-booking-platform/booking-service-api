@@ -1,6 +1,8 @@
 package com.ec7205.event_hub.booking_service_api.service.impl;
 
 import com.ec7205.event_hub.booking_service_api.client.EventServiceClient;
+import com.ec7205.event_hub.booking_service_api.client.NotificationServiceClient;
+import com.ec7205.event_hub.booking_service_api.client.dto.GeneralAlertNotificationRequest;
 import com.ec7205.event_hub.booking_service_api.dto.request.CreateBookingRequest;
 import com.ec7205.event_hub.booking_service_api.dto.request.TicketSelectionRequest;
 import com.ec7205.event_hub.booking_service_api.dto.response.ApiMessageResponse;
@@ -25,8 +27,13 @@ import com.ec7205.event_hub.booking_service_api.repository.BookingRepository;
 import com.ec7205.event_hub.booking_service_api.repository.PaymentRepository;
 import com.ec7205.event_hub.booking_service_api.service.BookingService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,6 +47,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class BookingServiceImpl implements BookingService {
@@ -50,6 +58,7 @@ public class BookingServiceImpl implements BookingService {
     private final BookingRepository bookingRepository;
     private final PaymentRepository paymentRepository;
     private final EventServiceClient eventServiceClient;
+    private final NotificationServiceClient notificationServiceClient;
     private final BookingMapper bookingMapper;
 
     @Override
@@ -96,6 +105,16 @@ public class BookingServiceImpl implements BookingService {
         savedBooking.setStatus(BookingStatus.CONFIRMED);
         savedBooking.setPayment(payment);
         Booking confirmedBooking = bookingRepository.save(savedBooking);
+        sendGeneralAlert(
+                confirmedBooking,
+                "Booking Confirmed",
+                String.format(
+                        "Your booking %s for %s was confirmed on %s.",
+                        confirmedBooking.getBookingReference(),
+                        confirmedBooking.getEventTitleSnapshot(),
+                        confirmedBooking.getCreatedAt() != null ? confirmedBooking.getCreatedAt() : LocalDateTime.now()
+                )
+        );
 
         return bookingMapper.toCreateBookingResponse(confirmedBooking);
     }
@@ -138,7 +157,16 @@ public class BookingServiceImpl implements BookingService {
             booking.getPayment().setStatus(PaymentStatus.REFUNDED);
         }
 
-        bookingRepository.save(booking);
+        Booking cancelledBooking = bookingRepository.save(booking);
+        sendGeneralAlert(
+                cancelledBooking,
+                "Booking Cancelled",
+                String.format(
+                        "Your booking %s for %s was cancelled successfully.",
+                        cancelledBooking.getBookingReference(),
+                        cancelledBooking.getEventTitleSnapshot()
+                )
+        );
 
         return ApiMessageResponse.builder()
                 .message("Booking cancelled successfully")
@@ -246,6 +274,43 @@ public class BookingServiceImpl implements BookingService {
 
     private boolean isAdmin(String userRole) {
         return ADMIN_ROLE.equalsIgnoreCase(userRole);
+    }
+
+    private void sendGeneralAlert(Booking booking, String subject, String message) {
+        Jwt jwt = getCurrentJwt();
+        if (jwt == null) {
+            log.warn("Skipping notification because authenticated JWT is unavailable for booking {}", booking.getBookingReference());
+            return;
+        }
+
+        GeneralAlertNotificationRequest request = GeneralAlertNotificationRequest.builder()
+                .userId(booking.getUserId())
+                .email(resolveEmail(jwt))
+                .subject(subject)
+                .message(message)
+                .build();
+
+        try {
+            notificationServiceClient.sendGeneralAlert(request);
+        } catch (Exception ex) {
+            log.warn("Failed to send notification for booking {}: {}", booking.getBookingReference(), ex.getMessage());
+        }
+    }
+
+    private Jwt getCurrentJwt() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication instanceof JwtAuthenticationToken jwtAuthenticationToken) {
+            return jwtAuthenticationToken.getToken();
+        }
+        return null;
+    }
+
+    private String resolveEmail(Jwt jwt) {
+        String email = jwt.getClaimAsString("email");
+        if (email != null && !email.isBlank()) {
+            return email;
+        }
+        return jwt.getClaimAsString("preferred_username");
     }
 
     private String generateBookingReference() {
