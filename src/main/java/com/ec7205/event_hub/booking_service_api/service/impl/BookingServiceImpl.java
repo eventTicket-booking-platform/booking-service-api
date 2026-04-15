@@ -54,6 +54,7 @@ import java.util.UUID;
 public class BookingServiceImpl implements BookingService {
 
     private static final String ADMIN_ROLE = "ADMIN";
+    private static final String HOST_ROLE = "HOST";
     private static final String PUBLISHED_EVENT_STATUS = "PUBLISHED";
 
     private final BookingRepository bookingRepository;
@@ -97,7 +98,7 @@ public class BookingServiceImpl implements BookingService {
         paymentRepository.save(payment);
 
         if (payment.getStatus() == PaymentStatus.FAILED) {
-            savedBooking.setStatus(BookingStatus.FAILED);
+            savedBooking.setStatus(BookingStatus.PENDING);
             savedBooking.setPayment(payment);
             bookingRepository.save(savedBooking);
             throw new PaymentFailedException("Payment failed for booking reference: " + savedBooking.getBookingReference());
@@ -140,7 +141,7 @@ public class BookingServiceImpl implements BookingService {
     @Transactional(readOnly = true)
     public BookingDetailResponse getBookingDetails(Long bookingId, String userId, String userRole) {
         Booking booking = getBookingWithRelations(bookingId);
-        assertOwnerOrAdmin(booking, userId, userRole);
+        assertOwnerOrAdminOrHost(booking, userId, userRole);
         return bookingMapper.toBookingDetailResponse(booking);
     }
 
@@ -236,7 +237,7 @@ public class BookingServiceImpl implements BookingService {
                 .eventId(eventInfo.getEventId())
                 .eventTitleSnapshot(eventInfo.getTitle())
                 .eventStartDateTimeSnapshot(eventInfo.getStartDateTime())
-                .status(BookingStatus.PENDING_PAYMENT)
+                .status(BookingStatus.PENDING)
                 .totalAmount(BigDecimal.ZERO)
                 .build();
     }
@@ -278,8 +279,19 @@ public class BookingServiceImpl implements BookingService {
         }
     }
 
+    private void assertOwnerOrAdminOrHost(Booking booking, String userId, String userRole) {
+        if (isAdminOrHost(userRole)) {
+            return;
+        }
+        assertOwnerOrAdmin(booking, userId, userRole);
+    }
+
     private boolean isAdmin(String userRole) {
         return ADMIN_ROLE.equalsIgnoreCase(userRole);
+    }
+
+    private boolean isAdminOrHost(String userRole) {
+        return isAdmin(userRole) || HOST_ROLE.equalsIgnoreCase(userRole);
     }
 
     private void sendGeneralAlert(Booking booking, String subject, String message) {

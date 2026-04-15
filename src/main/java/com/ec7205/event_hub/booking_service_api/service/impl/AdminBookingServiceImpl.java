@@ -68,14 +68,14 @@ public class AdminBookingServiceImpl implements AdminBookingService {
         long totalBookings = bookingRepository.count();
         long confirmedBookings = bookingRepository.countByStatus(BookingStatus.CONFIRMED);
         long cancelledBookings = bookingRepository.countByStatus(BookingStatus.CANCELLED);
-        long failedBookings = bookingRepository.countByStatus(BookingStatus.FAILED);
+        long pendingBookings = bookingRepository.countByStatus(BookingStatus.PENDING);
         BigDecimal totalRevenue = bookingRepository.sumTotalAmountByStatus(BookingStatus.CONFIRMED);
 
         return BookingStatsResponse.builder()
                 .totalBookings(totalBookings)
                 .confirmedBookings(confirmedBookings)
                 .cancelledBookings(cancelledBookings)
-                .failedBookings(failedBookings)
+                .pendingBookings(pendingBookings)
                 .totalRevenue(totalRevenue)
                 .build();
     }
