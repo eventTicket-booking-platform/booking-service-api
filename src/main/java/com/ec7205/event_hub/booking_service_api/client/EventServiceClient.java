@@ -7,6 +7,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 
 @FeignClient(name = "event-service-api")
 public interface EventServiceClient {
-    @GetMapping("/api/v1/internal/events/{eventId}/booking-info")
+    @GetMapping("/event-service/api/v1/internal/events/{eventId}/booking-info")
     EventBookingInfoResponse getEventBookingInfo(@PathVariable("eventId") Long eventId);
 }

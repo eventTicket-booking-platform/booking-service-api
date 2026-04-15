@@ -1,12 +1,11 @@
 package com.ec7205.event_hub.booking_service_api.controller;
 
 import com.ec7205.event_hub.booking_service_api.config.AuthenticatedUser;
-import com.ec7205.event_hub.booking_service_api.dto.response.AdminBookingSummaryResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.BookingStatsResponse;
+import com.ec7205.event_hub.booking_service_api.dto.response.pagination.AdminBookingPaginateResponseDto;
 import com.ec7205.event_hub.booking_service_api.enums.BookingStatus;
 import com.ec7205.event_hub.booking_service_api.service.AdminBookingService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
@@ -24,7 +23,7 @@ public class AdminBookingController {
     private final AdminBookingService adminBookingService;
 
     @GetMapping("/all")
-    public ResponseEntity<Page<AdminBookingSummaryResponse>> getAllBookings(
+    public ResponseEntity<AdminBookingPaginateResponseDto> getAllBookings(
             Authentication authentication,
             @RequestParam(required = false) BookingStatus status,
             @RequestParam(required = false) Long eventId,

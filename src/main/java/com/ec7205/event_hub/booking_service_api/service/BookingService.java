@@ -5,14 +5,14 @@ import com.ec7205.event_hub.booking_service_api.dto.response.ApiMessageResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.BookingDetailResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.BookingSummaryResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.CreateBookingResponse;
-import org.springframework.data.domain.Page;
+import com.ec7205.event_hub.booking_service_api.dto.response.pagination.BookingPaginateResponseDto;
 import org.springframework.data.domain.Pageable;
 
 public interface BookingService {
 
     CreateBookingResponse createBooking(String userId, CreateBookingRequest request);
 
-    Page<BookingSummaryResponse> getMyBookings(String userId, Pageable pageable);
+    BookingPaginateResponseDto getMyBookings(String userId, Pageable pageable);
 
     BookingDetailResponse getBookingDetails(Long bookingId, String userId, String userRole);
 

@@ -4,12 +4,11 @@ import com.ec7205.event_hub.booking_service_api.config.AuthenticatedUser;
 import com.ec7205.event_hub.booking_service_api.dto.request.CreateBookingRequest;
 import com.ec7205.event_hub.booking_service_api.dto.response.ApiMessageResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.BookingDetailResponse;
-import com.ec7205.event_hub.booking_service_api.dto.response.BookingSummaryResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.CreateBookingResponse;
+import com.ec7205.event_hub.booking_service_api.dto.response.pagination.BookingPaginateResponseDto;
 import com.ec7205.event_hub.booking_service_api.service.BookingService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
@@ -43,7 +42,7 @@ public class BookingController {
     }
 
     @GetMapping("/my")
-    public ResponseEntity<Page<BookingSummaryResponse>> getMyBookings(
+    public ResponseEntity<BookingPaginateResponseDto> getMyBookings(
             Authentication authentication,
             @PageableDefault(size = 10, sort = "createdAt") Pageable pageable
     ) {

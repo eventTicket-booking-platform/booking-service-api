@@ -11,6 +11,7 @@ import com.ec7205.event_hub.booking_service_api.dto.response.BookingSummaryRespo
 import com.ec7205.event_hub.booking_service_api.dto.response.CreateBookingResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.EventBookingInfoResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.EventTicketTypeResponse;
+import com.ec7205.event_hub.booking_service_api.dto.response.pagination.BookingPaginateResponseDto;
 import com.ec7205.event_hub.booking_service_api.entity.Booking;
 import com.ec7205.event_hub.booking_service_api.entity.BookingItem;
 import com.ec7205.event_hub.booking_service_api.entity.Payment;
@@ -121,13 +122,18 @@ public class BookingServiceImpl implements BookingService {
 
     @Override
     @Transactional(readOnly = true)
-    public Page<BookingSummaryResponse> getMyBookings(String userId, Pageable pageable) {
+    public BookingPaginateResponseDto getMyBookings(String userId, Pageable pageable) {
         if (userId == null || userId.isBlank()) {
             throw new BadRequestException("Authenticated user id is required");
         }
 
-        return bookingRepository.findByUserId(userId, pageable)
+        Page<BookingSummaryResponse> bookingPage = bookingRepository.findByUserId(userId, pageable)
                 .map(bookingMapper::toBookingSummaryResponse);
+
+        return BookingPaginateResponseDto.builder()
+                .dataList(bookingPage.getContent())
+                .dataCount(bookingPage.getTotalElements())
+                .build();
     }
 
     @Override

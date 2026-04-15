@@ -7,6 +7,9 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 
 public record AuthenticatedUser(String userId, String role) {
 
+    private static final String ADMIN_ROLE = "ADMIN";
+    private static final String HOST_ROLE = "HOST";
+
     public static AuthenticatedUser from(Authentication authentication) {
         if (!(authentication instanceof JwtAuthenticationToken jwtAuthenticationToken)) {
             throw new IllegalStateException("Authenticated JWT principal is required");
@@ -16,6 +19,7 @@ public record AuthenticatedUser(String userId, String role) {
         String role = jwtAuthenticationToken.getAuthorities().stream()
                 .map(GrantedAuthority::getAuthority)
                 .map(AuthenticatedUser::normalizeRole)
+                .filter(AuthenticatedUser::isBusinessRole)
                 .findFirst()
                 .orElse("USER");
 
@@ -27,5 +31,9 @@ public record AuthenticatedUser(String userId, String role) {
             return "USER";
         }
         return authority.startsWith("ROLE_") ? authority.substring(5) : authority.toUpperCase();
+    }
+
+    private static boolean isBusinessRole(String role) {
+        return ADMIN_ROLE.equals(role) || HOST_ROLE.equals(role);
     }
 }

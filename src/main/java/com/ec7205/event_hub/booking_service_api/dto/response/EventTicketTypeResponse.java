@@ -1,5 +1,6 @@
 package com.ec7205.event_hub.booking_service_api.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -16,6 +17,9 @@ import java.math.BigDecimal;
 public class EventTicketTypeResponse {
 
     private Long ticketTypeId;
+
+    @JsonAlias("name")
     private String ticketTypeName;
+
     private BigDecimal price;
 }

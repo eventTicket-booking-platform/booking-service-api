@@ -23,7 +23,7 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers("/booking-service/api/v1/internal/**").permitAll()
-                        .requestMatchers("/booking-service/api/v1/admin/**").hasRole("ADMIN")
+                        .requestMatchers("/booking-service/api/v1/admin/**").hasAnyAuthority("admin", "host")
                         .anyRequest().authenticated()
                 )
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthConverter)));
