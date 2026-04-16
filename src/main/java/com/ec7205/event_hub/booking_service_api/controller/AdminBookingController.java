@@ -12,6 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -25,13 +26,23 @@ public class AdminBookingController {
     @GetMapping("/all")
     public ResponseEntity<AdminBookingPaginateResponseDto> getAllBookings(
             Authentication authentication,
+            @RequestHeader("Authorization") String authorizationHeader,
             @RequestParam(required = false) BookingStatus status,
             @RequestParam(required = false) Long eventId,
             @RequestParam(required = false) String userId,
+            @RequestParam(required = false) String userEmail,
             @PageableDefault(size = 20, sort = "createdAt") Pageable pageable
     ) {
         AuthenticatedUser user = AuthenticatedUser.from(authentication);
-        return ResponseEntity.ok(adminBookingService.getAllBookings(user.role(), status, eventId, userId, pageable));
+        return ResponseEntity.ok(adminBookingService.getAllBookings(
+                user.role(),
+                authorizationHeader,
+                status,
+                eventId,
+                userId,
+                userEmail,
+                pageable
+        ));
     }
 
     @GetMapping("/stats")

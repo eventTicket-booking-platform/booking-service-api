@@ -51,6 +51,9 @@ public class Booking {
     @Column(nullable = false)
     private String eventTitleSnapshot;
 
+    @Column
+    private String eventBannerResourceUrlSnapshot;
+
     @Column(nullable = false)
     private LocalDateTime eventStartDateTimeSnapshot;
 

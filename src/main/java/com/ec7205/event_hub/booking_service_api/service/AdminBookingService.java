@@ -10,9 +10,11 @@ public interface AdminBookingService {
 
     AdminBookingPaginateResponseDto getAllBookings(
             String userRole,
+            String authorizationHeader,
             BookingStatus status,
             Long eventId,
             String userId,
+            String userEmail,
             Pageable pageable
     );
 

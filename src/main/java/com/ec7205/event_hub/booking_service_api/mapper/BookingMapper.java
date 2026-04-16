@@ -23,6 +23,7 @@ public class BookingMapper {
                 .bookingReference(booking.getBookingReference())
                 .eventId(booking.getEventId())
                 .eventTitle(booking.getEventTitleSnapshot())
+                .eventBannerResourceUrl(booking.getEventBannerResourceUrlSnapshot())
                 .status(booking.getStatus())
                 .totalAmount(booking.getTotalAmount())
                 .bookingDate(booking.getCreatedAt())
@@ -36,9 +37,13 @@ public class BookingMapper {
                 .bookingId(booking.getId())
                 .bookingReference(booking.getBookingReference())
                 .eventId(booking.getEventId())
+                .eventTitle(booking.getEventTitleSnapshot())
+                .eventStartDateTime(booking.getEventStartDateTimeSnapshot())
+                .eventBannerResourceUrl(booking.getEventBannerResourceUrlSnapshot())
                 .status(booking.getStatus())
                 .totalAmount(booking.getTotalAmount())
                 .bookingDate(booking.getCreatedAt())
+                .items(toItemResponses(booking.getItems()))
                 .build();
     }
 
@@ -62,6 +67,7 @@ public class BookingMapper {
                 .userId(booking.getUserId())
                 .eventId(booking.getEventId())
                 .eventTitle(booking.getEventTitleSnapshot())
+                .eventBannerResourceUrl(booking.getEventBannerResourceUrlSnapshot())
                 .eventStartDateTime(booking.getEventStartDateTimeSnapshot())
                 .status(booking.getStatus())
                 .totalAmount(booking.getTotalAmount())

@@ -23,6 +23,7 @@ public class BookingDetailResponse {
     private String userId;
     private Long eventId;
     private String eventTitle;
+    private String eventBannerResourceUrl;
     private LocalDateTime eventStartDateTime;
     private BookingStatus status;
     private BigDecimal totalAmount;

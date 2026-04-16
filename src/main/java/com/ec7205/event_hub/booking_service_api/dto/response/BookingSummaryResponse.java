@@ -9,6 +9,7 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Getter
 @Setter
@@ -20,7 +21,11 @@ public class BookingSummaryResponse {
     private Long bookingId;
     private String bookingReference;
     private Long eventId;
+    private String eventTitle;
+    private LocalDateTime eventStartDateTime;
+    private String eventBannerResourceUrl;
     private BookingStatus status;
     private BigDecimal totalAmount;
     private LocalDateTime bookingDate;
+    private List<BookingItemResponse> items;
 }

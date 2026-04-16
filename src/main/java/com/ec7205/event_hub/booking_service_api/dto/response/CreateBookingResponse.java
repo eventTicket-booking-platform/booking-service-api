@@ -22,6 +22,7 @@ public class CreateBookingResponse {
     private String bookingReference;
     private Long eventId;
     private String eventTitle;
+    private String eventBannerResourceUrl;
     private BookingStatus status;
     private BigDecimal totalAmount;
     private LocalDateTime bookingDate;

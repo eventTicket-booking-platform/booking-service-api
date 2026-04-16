@@ -2,7 +2,8 @@ package com.ec7205.event_hub.booking_service_api.service.impl;
 
 import com.ec7205.event_hub.booking_service_api.client.EventServiceClient;
 import com.ec7205.event_hub.booking_service_api.client.NotificationServiceClient;
-import com.ec7205.event_hub.booking_service_api.client.dto.GeneralAlertNotificationRequest;
+import com.ec7205.event_hub.booking_service_api.client.dto.BookingCancelledNotificationRequest;
+import com.ec7205.event_hub.booking_service_api.client.dto.BookingConfirmedNotificationRequest;
 import com.ec7205.event_hub.booking_service_api.dto.request.CreateBookingRequest;
 import com.ec7205.event_hub.booking_service_api.dto.request.TicketSelectionRequest;
 import com.ec7205.event_hub.booking_service_api.dto.response.ApiMessageResponse;
@@ -44,6 +45,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -107,16 +109,7 @@ public class BookingServiceImpl implements BookingService {
         savedBooking.setStatus(BookingStatus.CONFIRMED);
         savedBooking.setPayment(payment);
         Booking confirmedBooking = bookingRepository.save(savedBooking);
-        sendGeneralAlert(
-                confirmedBooking,
-                "Booking Confirmed",
-                String.format(
-                        "Your booking %s for %s was confirmed on %s.",
-                        confirmedBooking.getBookingReference(),
-                        confirmedBooking.getEventTitleSnapshot(),
-                        confirmedBooking.getCreatedAt() != null ? confirmedBooking.getCreatedAt() : LocalDateTime.now()
-                )
-        );
+        sendBookingConfirmedNotification(confirmedBooking);
 
         return bookingMapper.toCreateBookingResponse(confirmedBooking);
     }
@@ -128,11 +121,15 @@ public class BookingServiceImpl implements BookingService {
             throw new BadRequestException("Authenticated user id is required");
         }
 
-        Page<BookingSummaryResponse> bookingPage = bookingRepository.findByUserId(userId, pageable)
-                .map(bookingMapper::toBookingSummaryResponse);
+        Page<Booking> bookingPage = bookingRepository.findByUserId(userId, pageable);
+        Map<Long, String> bannerCache = new HashMap<>();
+        List<BookingSummaryResponse> summaries = bookingPage.getContent().stream()
+                .peek(booking -> populateBannerIfMissing(booking, bannerCache))
+                .map(bookingMapper::toBookingSummaryResponse)
+                .toList();
 
         return BookingPaginateResponseDto.builder()
-                .dataList(bookingPage.getContent())
+                .dataList(summaries)
                 .dataCount(bookingPage.getTotalElements())
                 .build();
     }
@@ -142,6 +139,7 @@ public class BookingServiceImpl implements BookingService {
     public BookingDetailResponse getBookingDetails(Long bookingId, String userId, String userRole) {
         Booking booking = getBookingWithRelations(bookingId);
         assertOwnerOrAdminOrHost(booking, userId, userRole);
+        populateBannerIfMissing(booking, new HashMap<>());
         return bookingMapper.toBookingDetailResponse(booking);
     }
 
@@ -165,15 +163,7 @@ public class BookingServiceImpl implements BookingService {
         }
 
         Booking cancelledBooking = bookingRepository.save(booking);
-        sendGeneralAlert(
-                cancelledBooking,
-                "Booking Cancelled",
-                String.format(
-                        "Your booking %s for %s was cancelled successfully.",
-                        cancelledBooking.getBookingReference(),
-                        cancelledBooking.getEventTitleSnapshot()
-                )
-        );
+        sendBookingCancelledNotification(cancelledBooking);
 
         return ApiMessageResponse.builder()
                 .message("Booking cancelled successfully")
@@ -236,6 +226,7 @@ public class BookingServiceImpl implements BookingService {
                 .userId(userId)
                 .eventId(eventInfo.getEventId())
                 .eventTitleSnapshot(eventInfo.getTitle())
+                .eventBannerResourceUrlSnapshot(eventInfo.getBannerUrl())
                 .eventStartDateTimeSnapshot(eventInfo.getStartDateTime())
                 .status(BookingStatus.PENDING)
                 .totalAmount(BigDecimal.ZERO)
@@ -263,6 +254,29 @@ public class BookingServiceImpl implements BookingService {
     private Booking getBookingWithRelations(Long bookingId) {
         return bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new ResourceNotFoundException("Booking not found for id: " + bookingId));
+    }
+
+    private void populateBannerIfMissing(Booking booking, Map<Long, String> bannerCache) {
+        if (booking.getEventBannerResourceUrlSnapshot() != null && !booking.getEventBannerResourceUrlSnapshot().isBlank()) {
+            return;
+        }
+
+        String cached = bannerCache.get(booking.getEventId());
+        if (cached != null) {
+            booking.setEventBannerResourceUrlSnapshot(cached);
+            return;
+        }
+
+        try {
+            EventBookingInfoResponse eventInfo = eventServiceClient.getEventBookingInfo(booking.getEventId());
+            String bannerUrl = eventInfo != null ? eventInfo.getBannerUrl() : null;
+            if (bannerUrl != null && !bannerUrl.isBlank()) {
+                booking.setEventBannerResourceUrlSnapshot(bannerUrl);
+                bannerCache.put(booking.getEventId(), bannerUrl);
+            }
+        } catch (Exception ex) {
+            log.warn("Unable to resolve banner URL for booking {} / event {}: {}", booking.getBookingReference(), booking.getEventId(), ex.getMessage());
+        }
     }
 
     private void assertOwnerOrAdmin(Booking booking, String userId, String userRole) {
@@ -294,22 +308,46 @@ public class BookingServiceImpl implements BookingService {
         return isAdmin(userRole) || HOST_ROLE.equalsIgnoreCase(userRole);
     }
 
-    private void sendGeneralAlert(Booking booking, String subject, String message) {
+    private void sendBookingConfirmedNotification(Booking booking) {
         Jwt jwt = getCurrentJwt();
         if (jwt == null) {
             log.warn("Skipping notification because authenticated JWT is unavailable for booking {}", booking.getBookingReference());
             return;
         }
 
-        GeneralAlertNotificationRequest request = GeneralAlertNotificationRequest.builder()
+        BookingConfirmedNotificationRequest request = BookingConfirmedNotificationRequest.builder()
                 .userId(booking.getUserId())
                 .email(resolveEmail(jwt))
-                .subject(subject)
-                .message(message)
+                .name(resolveDisplayName(jwt))
+                .bookingId(booking.getBookingReference())
+                .eventTitle(booking.getEventTitleSnapshot())
+                .bookingDate(String.valueOf(booking.getCreatedAt() != null ? booking.getCreatedAt() : LocalDateTime.now()))
                 .build();
 
         try {
-            notificationServiceClient.sendGeneralAlert(request);
+            notificationServiceClient.sendBookingConfirmed(request);
+        } catch (Exception ex) {
+            log.warn("Failed to send notification for booking {}: {}", booking.getBookingReference(), ex.getMessage());
+        }
+    }
+
+    private void sendBookingCancelledNotification(Booking booking) {
+        Jwt jwt = getCurrentJwt();
+        if (jwt == null) {
+            log.warn("Skipping notification because authenticated JWT is unavailable for booking {}", booking.getBookingReference());
+            return;
+        }
+
+        BookingCancelledNotificationRequest request = BookingCancelledNotificationRequest.builder()
+                .userId(booking.getUserId())
+                .email(resolveEmail(jwt))
+                .name(resolveDisplayName(jwt))
+                .bookingId(booking.getBookingReference())
+                .eventTitle(booking.getEventTitleSnapshot())
+                .build();
+
+        try {
+            notificationServiceClient.sendBookingCancelled(request);
         } catch (Exception ex) {
             log.warn("Failed to send notification for booking {}: {}", booking.getBookingReference(), ex.getMessage());
         }
@@ -329,6 +367,18 @@ public class BookingServiceImpl implements BookingService {
             return email;
         }
         return jwt.getClaimAsString("preferred_username");
+    }
+
+    private String resolveDisplayName(Jwt jwt) {
+        String fullName = jwt.getClaimAsString("name");
+        if (fullName != null && !fullName.isBlank()) {
+            return fullName;
+        }
+        String givenName = jwt.getClaimAsString("given_name");
+        if (givenName != null && !givenName.isBlank()) {
+            return givenName;
+        }
+        return null;
     }
 
     private String generateBookingReference() {

@@ -18,6 +18,7 @@ public class EventBookingInfoResponse {
 
     private Long eventId;
     private String title;
+    private String bannerUrl;
     private String status;
     private LocalDateTime startDateTime;
     private List<EventTicketTypeResponse> ticketTypes;
