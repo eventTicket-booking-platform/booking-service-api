@@ -40,14 +40,14 @@ public class Payment {
     private Booking booking;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 32)
+    @Column(nullable = false, length = 32, columnDefinition = "varchar(32)")
     private PaymentMethod method;
 
     @Column(nullable = false, precision = 12, scale = 2)
     private BigDecimal amount;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 32)
+    @Column(nullable = false, length = 32, columnDefinition = "varchar(32)")
     private PaymentStatus status;
 
     @Column(nullable = false, unique = true, length = 64)

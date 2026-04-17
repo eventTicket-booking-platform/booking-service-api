@@ -2,7 +2,6 @@ package com.ec7205.event_hub.booking_service_api.controller;
 
 import com.ec7205.event_hub.booking_service_api.config.AuthenticatedUser;
 import com.ec7205.event_hub.booking_service_api.dto.request.CreateBookingRequest;
-import com.ec7205.event_hub.booking_service_api.dto.response.ApiMessageResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.BookingDetailResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.CreateBookingResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.pagination.BookingPaginateResponseDto;
@@ -16,7 +15,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -57,14 +55,5 @@ public class BookingController {
     ) {
         AuthenticatedUser user = AuthenticatedUser.from(authentication);
         return ResponseEntity.ok(bookingService.getBookingDetails(bookingId, user.userId(), user.role()));
-    }
-
-    @PatchMapping("/{bookingId}/cancel")
-    public ResponseEntity<ApiMessageResponse> cancelBooking(
-            @PathVariable Long bookingId,
-            Authentication authentication
-    ) {
-        AuthenticatedUser user = AuthenticatedUser.from(authentication);
-        return ResponseEntity.ok(bookingService.cancelBooking(bookingId, user.userId(), user.role()));
     }
 }

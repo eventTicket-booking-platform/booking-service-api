@@ -58,7 +58,7 @@ public class Booking {
     private LocalDateTime eventStartDateTimeSnapshot;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 32)
+    @Column(nullable = false, length = 32, columnDefinition = "varchar(32)")
     private BookingStatus status;
 
     @Column(nullable = false, precision = 12, scale = 2)
