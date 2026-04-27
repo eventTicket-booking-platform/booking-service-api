@@ -18,26 +18,35 @@ env:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      # - name: Set up JDK
-      #   uses: actions/setup-java@v4
-      #   with:
-      #     distribution: temurin
-      #     java-version: "17"
-      #
-      # - name: SonarQube Scan
-      #   env:
-      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      #     SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      #   run: |
-      #     ./mvnw verify sonar:sonar \
-      #       -Dsonar.projectKey=booking-service-api \
-      #       -Dsonar.host.url=${SONAR_HOST_URL} \
-      #       -Dsonar.token=${SONAR_TOKEN}
+      - name: Make Maven wrapper executable
+        run: chmod +x mvnw
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Run tests
+        run: ./mvnw test
+
+      - name: SonarQube Scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: |
+          ./mvnw verify sonar:sonar \
+            -Dsonar.projectKey=booking-service-api \
+            -Dsonar.host.url=${SONAR_HOST_URL} \
+            -Dsonar.token=${SONAR_TOKEN}
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
