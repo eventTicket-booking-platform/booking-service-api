@@ -3,6 +3,8 @@ package com.ec7205.event_hub.booking_service_api.service.impl;
 import com.ec7205.event_hub.booking_service_api.client.EventServiceClient;
 import com.ec7205.event_hub.booking_service_api.client.dto.BookingConfirmedNotificationRequest;
 import com.ec7205.event_hub.booking_service_api.dto.request.CreateBookingRequest;
+import com.ec7205.event_hub.booking_service_api.dto.request.ReserveTicketsRequest;
+import com.ec7205.event_hub.booking_service_api.dto.request.TicketReservationRequest;
 import com.ec7205.event_hub.booking_service_api.dto.request.TicketSelectionRequest;
 import com.ec7205.event_hub.booking_service_api.dto.response.BookingDetailResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.BookingSummaryResponse;
@@ -74,6 +76,8 @@ public class BookingServiceImpl implements BookingService {
 
         Map<Long, EventTicketTypeResponse> ticketTypeMap = validateAndMapTicketTypes(request, eventInfo);
         Booking booking = initializeBooking(userId, eventInfo);
+
+        reserveRequestedTickets(request);
 
         BigDecimal totalAmount = BigDecimal.ZERO;
         for (TicketSelectionRequest selection : request.getTicketSelections()) {
@@ -204,7 +208,28 @@ public class BookingServiceImpl implements BookingService {
                 .totalAmount(BigDecimal.ZERO)
                 .build();
     }
+    private void reserveRequestedTickets(CreateBookingRequest request) {
 
+        List<TicketReservationRequest> tickets =
+                request.getTicketSelections().stream()
+                        .map(selection ->
+                                TicketReservationRequest.builder()
+                                        .ticketTypeId(selection.getTicketTypeId())
+                                        .quantity(selection.getQuantity())
+                                        .build()
+                        )
+                        .toList();
+
+        ReserveTicketsRequest reserveRequest =
+                ReserveTicketsRequest.builder()
+                        .tickets(tickets)
+                        .build();
+
+        eventServiceClient.reserveTickets(
+                request.getEventId(),
+                reserveRequest
+        );
+    }
     private Payment simulatePayment(Booking booking, PaymentMethod paymentMethod, BigDecimal amount) {
         PaymentStatus paymentStatus = paymentMethod == PaymentMethod.SIMULATED_FAIL
                 ? PaymentStatus.FAILED
