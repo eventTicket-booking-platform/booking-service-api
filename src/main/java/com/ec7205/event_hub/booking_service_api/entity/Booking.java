@@ -1,18 +1,7 @@
 package com.ec7205.event_hub.booking_service_api.entity;
 
 import com.ec7205.event_hub.booking_service_api.enums.BookingStatus;
-import jakarta.persistence.CascadeType;
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
-import jakarta.persistence.FetchType;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
-import jakarta.persistence.OneToMany;
-import jakarta.persistence.OneToOne;
-import jakarta.persistence.Table;
+import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -32,17 +21,26 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
-@Table(name = "bookings")
+@Table(name = "bookings",
+        uniqueConstraints = {
+        @UniqueConstraint(
+                name = "uk_booking_user_idempotency",
+                columnNames = {"user_id", "idempotency_key"}
+        )
+})
 public class Booking {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "idempotency_key", nullable = false, length = 100)
+    private String idempotencyKey;
+
     @Column(nullable = false, unique = true, length = 32)
     private String bookingReference;
 
-    @Column(nullable = false, length = 80)
+    @Column(name = "user_id", nullable = false, length = 80)
     private String userId;
 
     @Column(nullable = false)

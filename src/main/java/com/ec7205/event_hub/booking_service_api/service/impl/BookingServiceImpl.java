@@ -68,21 +68,48 @@ public class BookingServiceImpl implements BookingService {
 
     @Override
     @Transactional(noRollbackFor = PaymentFailedException.class)
-    public CreateBookingResponse createBooking(String userId, CreateBookingRequest request) {
+    public CreateBookingResponse createBooking(
+            String userId,
+            String idempotencyKey,
+            CreateBookingRequest request
+    ) {
         validateCreateRequest(userId, request);
 
-        EventBookingInfoResponse eventInfo = eventServiceClient.getEventBookingInfo(request.getEventId());
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new BadRequestException("Idempotency-Key header is required");
+        }
+
+        Booking existingBooking =
+                bookingRepository
+                        .findByUserIdAndIdempotencyKey(userId, idempotencyKey)
+                        .orElse(null);
+
+        if (existingBooking != null) {
+            return bookingMapper.toCreateBookingResponse(existingBooking);
+        }
+
+        EventBookingInfoResponse eventInfo =
+                eventServiceClient.getEventBookingInfo(request.getEventId());
+
         validateEventForBooking(eventInfo);
 
-        Map<Long, EventTicketTypeResponse> ticketTypeMap = validateAndMapTicketTypes(request, eventInfo);
-        Booking booking = initializeBooking(userId, eventInfo);
+        Map<Long, EventTicketTypeResponse> ticketTypeMap =
+                validateAndMapTicketTypes(request, eventInfo);
+
+        Booking booking =
+                initializeBooking(userId, idempotencyKey, eventInfo);
 
         reserveRequestedTickets(request);
 
         BigDecimal totalAmount = BigDecimal.ZERO;
+
         for (TicketSelectionRequest selection : request.getTicketSelections()) {
-            EventTicketTypeResponse ticketType = ticketTypeMap.get(selection.getTicketTypeId());
-            BigDecimal subtotal = ticketType.getPrice().multiply(BigDecimal.valueOf(selection.getQuantity()));
+            EventTicketTypeResponse ticketType =
+                    ticketTypeMap.get(selection.getTicketTypeId());
+
+            BigDecimal subtotal =
+                    ticketType.getPrice()
+                            .multiply(BigDecimal.valueOf(selection.getQuantity()));
 
             BookingItem item = BookingItem.builder()
                     .ticketTypeId(ticketType.getTicketTypeId())
@@ -91,15 +118,23 @@ public class BookingServiceImpl implements BookingService {
                     .quantity(selection.getQuantity())
                     .subtotal(subtotal)
                     .build();
+
             booking.addItem(item);
             totalAmount = totalAmount.add(subtotal);
         }
 
         booking.setTotalAmount(totalAmount);
 
-        Booking savedBooking = bookingRepository.save(booking);
+        Booking savedBooking =
+                bookingRepository.save(booking);
 
-        Payment payment = simulatePayment(savedBooking, request.getPaymentMethod(), totalAmount);
+        Payment payment =
+                simulatePayment(
+                        savedBooking,
+                        request.getPaymentMethod(),
+                        totalAmount
+                );
+
         paymentRepository.save(payment);
 
         if (payment.getStatus() == PaymentStatus.FAILED) {
@@ -108,6 +143,7 @@ public class BookingServiceImpl implements BookingService {
 
             savedBooking.setStatus(BookingStatus.PENDING);
             savedBooking.setPayment(payment);
+
             bookingRepository.save(savedBooking);
 
             throw new PaymentFailedException(
@@ -118,7 +154,10 @@ public class BookingServiceImpl implements BookingService {
 
         savedBooking.setStatus(BookingStatus.CONFIRMED);
         savedBooking.setPayment(payment);
-        Booking confirmedBooking = bookingRepository.save(savedBooking);
+
+        Booking confirmedBooking =
+                bookingRepository.save(savedBooking);
+
         sendBookingConfirmedNotification(confirmedBooking);
 
         return bookingMapper.toCreateBookingResponse(confirmedBooking);
@@ -203,9 +242,10 @@ public class BookingServiceImpl implements BookingService {
         return ticketTypeMap;
     }
 
-    private Booking initializeBooking(String userId, EventBookingInfoResponse eventInfo) {
+    private Booking initializeBooking(String userId,String idempotencyKey, EventBookingInfoResponse eventInfo) {
         return Booking.builder()
                 .bookingReference(generateBookingReference())
+                .idempotencyKey(idempotencyKey)
                 .userId(userId)
                 .eventId(eventInfo.getEventId())
                 .eventTitleSnapshot(eventInfo.getTitle())

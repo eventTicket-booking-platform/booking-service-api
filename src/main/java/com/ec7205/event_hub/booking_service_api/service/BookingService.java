@@ -8,7 +8,11 @@ import org.springframework.data.domain.Pageable;
 
 public interface BookingService {
 
-    CreateBookingResponse createBooking(String userId, CreateBookingRequest request);
+    CreateBookingResponse createBooking(
+            String userId,
+            String idempotencyKey,
+            CreateBookingRequest request
+    );
 
     BookingPaginateResponseDto getMyBookings(String userId, Pageable pageable);
 
