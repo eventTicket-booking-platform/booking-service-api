@@ -39,17 +39,16 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.*;
+import java.util.stream.Collectors;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
 
 @Slf4j
 @Service
@@ -78,13 +77,24 @@ public class BookingServiceImpl implements BookingService {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new BadRequestException("Idempotency-Key header is required");
         }
-
+        String requestFingerprint =
+                generateRequestFingerprint(request);
         Booking existingBooking =
                 bookingRepository
                         .findByUserIdAndIdempotencyKey(userId, idempotencyKey)
                         .orElse(null);
 
         if (existingBooking != null) {
+
+            if (!Objects.equals(
+                    existingBooking.getRequestFingerprint(),
+                    requestFingerprint
+            )) {
+                throw new ConflictException(
+                        "Idempotency key was already used with a different request"
+                );
+            }
+
             return bookingMapper.toCreateBookingResponse(existingBooking);
         }
 
@@ -97,7 +107,7 @@ public class BookingServiceImpl implements BookingService {
                 validateAndMapTicketTypes(request, eventInfo);
 
         Booking booking =
-                initializeBooking(userId, idempotencyKey, eventInfo);
+                initializeBooking(userId, idempotencyKey,requestFingerprint, eventInfo);
 
         reserveRequestedTickets(request);
 
@@ -242,10 +252,11 @@ public class BookingServiceImpl implements BookingService {
         return ticketTypeMap;
     }
 
-    private Booking initializeBooking(String userId,String idempotencyKey, EventBookingInfoResponse eventInfo) {
+    private Booking initializeBooking(String userId,String idempotencyKey,String requestFingerprint, EventBookingInfoResponse eventInfo) {
         return Booking.builder()
                 .bookingReference(generateBookingReference())
                 .idempotencyKey(idempotencyKey)
+                .requestFingerprint(requestFingerprint)
                 .userId(userId)
                 .eventId(eventInfo.getEventId())
                 .eventTitleSnapshot(eventInfo.getTitle())
@@ -454,5 +465,21 @@ public class BookingServiceImpl implements BookingService {
     private String generateTransactionReference() {
         String randomPart = UUID.randomUUID().toString().replace("-", "").substring(0, 10).toUpperCase();
         return "TXN-" + randomPart;
+    }
+    private String generateRequestFingerprint(CreateBookingRequest request) {
+        String raw = request.getEventId()
+                + "|" + request.getPaymentMethod()
+                + "|" + request.getTicketSelections().stream()
+                .sorted(Comparator.comparing(TicketSelectionRequest::getTicketTypeId))
+                .map(t -> t.getTicketTypeId() + ":" + t.getQuantity())
+                .collect(Collectors.joining(","));
+
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(raw.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hash);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is not available", e);
+        }
     }
 }

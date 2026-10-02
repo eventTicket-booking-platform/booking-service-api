@@ -37,6 +37,9 @@ public class Booking {
     @Column(name = "idempotency_key", nullable = false, length = 100)
     private String idempotencyKey;
 
+    @Column(name = "request_fingerprint", nullable = false, length = 64)
+    private String requestFingerprint;
+
     @Column(nullable = false, unique = true, length = 32)
     private String bookingReference;
 

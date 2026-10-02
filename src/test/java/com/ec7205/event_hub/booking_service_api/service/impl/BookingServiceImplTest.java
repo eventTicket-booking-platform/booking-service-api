@@ -26,7 +26,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 
@@ -578,11 +582,18 @@ class BookingServiceImplTest {
 
     @Test
     void shouldReturnExistingBookingWhenIdempotencyKeyAlreadyExists() {
-
+        String matchingFingerprint =
+                generateFingerprintForTest(
+                        100L,
+                        PaymentMethod.CARD,
+                        1L,
+                        2
+                );
         Booking existingBooking = Booking.builder()
                 .id(1L)
                 .bookingReference("BK-EXISTING")
                 .idempotencyKey("key-123")
+                .requestFingerprint(matchingFingerprint)
                 .userId("user-1")
                 .eventId(100L)
                 .eventTitleSnapshot("Test Event")
@@ -626,6 +637,7 @@ class BookingServiceImplTest {
                 bookingService.createBooking(
                         "user-1",
                         "key-123",
+
                         request
                 );
 
@@ -927,5 +939,203 @@ class BookingServiceImplTest {
                 .save(any(Payment.class));
     }
 
-    
+    @Test
+    void shouldReturnExistingBookingWhenSameKeyAndSameRequest() {
+
+        // ARRANGE
+        CreateBookingRequest request =
+                CreateBookingRequest.builder()
+                        .eventId(100L)
+                        .ticketSelections(
+                                List.of(
+                                        TicketSelectionRequest.builder()
+                                                .ticketTypeId(1L)
+                                                .quantity(2)
+                                                .build()
+                                )
+                        )
+                        .paymentMethod(PaymentMethod.CARD)
+                        .build();
+
+        // IMPORTANT:
+        // This fingerprint must match the fingerprint generated
+        // by the production code for the request above.
+        String matchingFingerprint =
+                generateFingerprintForTest(
+                        100L,
+                        PaymentMethod.CARD,
+                        1L,
+                        2
+                );
+
+        Booking existingBooking =
+                Booking.builder()
+                        .id(1L)
+                        .bookingReference("BK-EXISTING")
+                        .idempotencyKey("key-123")
+                        .requestFingerprint(matchingFingerprint)
+                        .userId("user-1")
+                        .eventId(100L)
+                        .eventTitleSnapshot("Test Event")
+                        .eventStartDateTimeSnapshot(
+                                LocalDateTime.now().plusDays(1)
+                        )
+                        .status(BookingStatus.CONFIRMED)
+                        .totalAmount(BigDecimal.valueOf(5000))
+                        .build();
+
+        CreateBookingResponse existingResponse =
+                CreateBookingResponse.builder()
+                        .bookingId(1L)
+                        .bookingReference("BK-EXISTING")
+                        .eventId(100L)
+                        .eventTitle("Test Event")
+                        .status(BookingStatus.CONFIRMED)
+                        .totalAmount(BigDecimal.valueOf(5000))
+                        .build();
+
+        when(
+                bookingRepository.findByUserIdAndIdempotencyKey(
+                        "user-1",
+                        "key-123"
+                )
+        ).thenReturn(Optional.of(existingBooking));
+
+        when(
+                bookingMapper.toCreateBookingResponse(existingBooking)
+        ).thenReturn(existingResponse);
+
+        // ACT
+        CreateBookingResponse response =
+                bookingService.createBooking(
+                        "user-1",
+                        "key-123",
+                        request
+                );
+
+        // ASSERT
+        assertEquals(
+                "BK-EXISTING",
+                response.getBookingReference()
+        );
+
+        assertEquals(
+                BookingStatus.CONFIRMED,
+                response.getStatus()
+        );
+
+        // Duplicate request should stop here.
+        verify(eventServiceClient, never())
+                .getEventBookingInfo(anyLong());
+
+        verify(eventServiceClient, never())
+                .reserveTickets(
+                        anyLong(),
+                        any(ReserveTicketsRequest.class)
+                );
+
+        verify(eventServiceClient, never())
+                .releaseTickets(
+                        anyLong(),
+                        any(ReserveTicketsRequest.class)
+                );
+
+        verify(bookingRepository, never())
+                .save(any(Booking.class));
+
+        verify(paymentRepository, never())
+                .save(any(Payment.class));
+    }
+
+    @Test
+    void shouldRejectSameIdempotencyKeyWithDifferentRequest() {
+
+        Booking existingBooking = Booking.builder()
+                .id(1L)
+                .bookingReference("BK-EXISTING")
+                .idempotencyKey("key-123")
+                .requestFingerprint("different-fingerprint")
+                .userId("user-1")
+                .eventId(100L)
+                .eventTitleSnapshot("Test Event")
+                .eventStartDateTimeSnapshot(LocalDateTime.now().plusDays(1))
+                .status(BookingStatus.CONFIRMED)
+                .totalAmount(BigDecimal.valueOf(5000))
+                .build();
+
+        CreateBookingRequest request =
+                CreateBookingRequest.builder()
+                        .eventId(100L)
+                        .ticketSelections(
+                                List.of(
+                                        TicketSelectionRequest.builder()
+                                                .ticketTypeId(1L)
+                                                .quantity(5)
+                                                .build()
+                                )
+                        )
+                        .paymentMethod(PaymentMethod.CARD)
+                        .build();
+
+        when(
+                bookingRepository.findByUserIdAndIdempotencyKey(
+                        "user-1",
+                        "key-123"
+                )
+        ).thenReturn(Optional.of(existingBooking));
+
+        assertThrows(
+                ConflictException.class,
+                () -> bookingService.createBooking(
+                        "user-1",
+                        "key-123",
+                        request
+                )
+        );
+
+        verify(eventServiceClient, never())
+                .getEventBookingInfo(anyLong());
+
+        verify(eventServiceClient, never())
+                .reserveTickets(anyLong(), any());
+
+        verify(paymentRepository, never())
+                .save(any());
+
+        verify(bookingRepository, never())
+                .save(any());
+    }
+
+    private String generateFingerprintForTest(
+            Long eventId,
+            PaymentMethod paymentMethod,
+            Long ticketTypeId,
+            Integer quantity
+    ) {
+        String raw =
+                eventId
+                        + "|" + paymentMethod
+                        + "|" + ticketTypeId
+                        + ":" + quantity;
+
+        try {
+            MessageDigest digest =
+                    MessageDigest.getInstance("SHA-256");
+
+            byte[] hash =
+                    digest.digest(
+                            raw.getBytes(StandardCharsets.UTF_8)
+                    );
+
+            return HexFormat.of().formatHex(hash);
+
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(
+                    "SHA-256 is not available",
+                    e
+            );
+        }
+    }
+
+
 }
