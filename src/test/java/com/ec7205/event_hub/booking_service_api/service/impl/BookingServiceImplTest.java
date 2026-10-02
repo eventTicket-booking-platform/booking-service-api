@@ -434,4 +434,144 @@ class BookingServiceImplTest {
                 savedBooking.getStatus()
         );
     }
+
+    @Test
+    void shouldReleaseTicketsWhenPaymentFails() {
+
+        EventTicketTypeResponse ticketType =
+                EventTicketTypeResponse.builder()
+                        .ticketTypeId(1L)
+                        .ticketTypeName("Standard")
+                        .price(BigDecimal.valueOf(2500))
+                        .build();
+
+        EventBookingInfoResponse eventInfo =
+                EventBookingInfoResponse.builder()
+                        .eventId(100L)
+                        .title("Test Event")
+                        .status("PUBLISHED")
+                        .startDateTime(LocalDateTime.now().plusDays(1))
+                        .ticketTypes(List.of(ticketType))
+                        .build();
+
+        CreateBookingRequest request =
+                CreateBookingRequest.builder()
+                        .eventId(100L)
+                        .ticketSelections(
+                                List.of(
+                                        TicketSelectionRequest.builder()
+                                                .ticketTypeId(1L)
+                                                .quantity(2)
+                                                .build()
+                                )
+                        )
+                        .paymentMethod(PaymentMethod.SIMULATED_FAIL)
+                        .build();
+
+        when(eventServiceClient.getEventBookingInfo(100L))
+                .thenReturn(eventInfo);
+
+        when(bookingRepository.save(any(Booking.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        when(paymentRepository.save(any(Payment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThrows(
+                PaymentFailedException.class,
+                () -> bookingService.createBooking("user-1", request)
+        );
+
+        verify(eventServiceClient)
+                .reserveTickets(
+                        eq(100L),
+                        any(ReserveTicketsRequest.class)
+                );
+
+        ArgumentCaptor<ReserveTicketsRequest> releaseCaptor =
+                ArgumentCaptor.forClass(ReserveTicketsRequest.class);
+
+        verify(eventServiceClient)
+                .releaseTickets(
+                        eq(100L),
+                        releaseCaptor.capture()
+                );
+
+        ReserveTicketsRequest releaseRequest =
+                releaseCaptor.getValue();
+
+        assertEquals(1, releaseRequest.getTickets().size());
+        assertEquals(
+                1L,
+                releaseRequest.getTickets().get(0).getTicketTypeId()
+        );
+        assertEquals(
+                2,
+                releaseRequest.getTickets().get(0).getQuantity()
+        );
+    }
+
+    @Test
+    void shouldNotReleaseTicketsWhenPaymentSucceeds() {
+
+        EventTicketTypeResponse ticketType =
+                EventTicketTypeResponse.builder()
+                        .ticketTypeId(1L)
+                        .ticketTypeName("Standard")
+                        .price(BigDecimal.valueOf(2500))
+                        .build();
+
+        EventBookingInfoResponse eventInfo =
+                EventBookingInfoResponse.builder()
+                        .eventId(100L)
+                        .title("Test Event")
+                        .status("PUBLISHED")
+                        .startDateTime(LocalDateTime.now().plusDays(1))
+                        .ticketTypes(List.of(ticketType))
+                        .build();
+
+        CreateBookingRequest request =
+                CreateBookingRequest.builder()
+                        .eventId(100L)
+                        .ticketSelections(
+                                List.of(
+                                        TicketSelectionRequest.builder()
+                                                .ticketTypeId(1L)
+                                                .quantity(2)
+                                                .build()
+                                )
+                        )
+                        .paymentMethod(PaymentMethod.CARD)
+                        .build();
+
+        when(eventServiceClient.getEventBookingInfo(100L))
+                .thenReturn(eventInfo);
+
+        when(bookingRepository.save(any(Booking.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        when(paymentRepository.save(any(Payment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        when(bookingMapper.toCreateBookingResponse(any(Booking.class)))
+                .thenReturn(
+                        CreateBookingResponse.builder()
+                                .status(BookingStatus.CONFIRMED)
+                                .build()
+                );
+
+        bookingService.createBooking("user-1", request);
+
+        verify(eventServiceClient)
+                .reserveTickets(
+                        eq(100L),
+                        any(ReserveTicketsRequest.class)
+                );
+
+        verify(eventServiceClient, never())
+                .releaseTickets(
+                        anyLong(),
+                        any(ReserveTicketsRequest.class)
+                );
+    }
 }

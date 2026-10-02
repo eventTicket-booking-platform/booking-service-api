@@ -18,4 +18,10 @@ public interface EventServiceClient {
             @PathVariable("eventId") Long eventId,
             @RequestBody ReserveTicketsRequest request
     );
+
+    @PostMapping("/event-service/api/v1/internal/events/{eventId}/release")
+    void releaseTickets(
+            @PathVariable("eventId") Long eventId,
+            @RequestBody ReserveTicketsRequest request
+    );
 }

@@ -103,10 +103,17 @@ public class BookingServiceImpl implements BookingService {
         paymentRepository.save(payment);
 
         if (payment.getStatus() == PaymentStatus.FAILED) {
+
+            releaseRequestedTickets(request);
+
             savedBooking.setStatus(BookingStatus.PENDING);
             savedBooking.setPayment(payment);
             bookingRepository.save(savedBooking);
-            throw new PaymentFailedException("Payment failed for booking reference: " + savedBooking.getBookingReference());
+
+            throw new PaymentFailedException(
+                    "Payment failed for booking reference: "
+                            + savedBooking.getBookingReference()
+            );
         }
 
         savedBooking.setStatus(BookingStatus.CONFIRMED);
@@ -230,6 +237,30 @@ public class BookingServiceImpl implements BookingService {
                 reserveRequest
         );
     }
+
+    private void releaseRequestedTickets(CreateBookingRequest request) {
+
+        List<TicketReservationRequest> tickets =
+                request.getTicketSelections().stream()
+                        .map(selection ->
+                                TicketReservationRequest.builder()
+                                        .ticketTypeId(selection.getTicketTypeId())
+                                        .quantity(selection.getQuantity())
+                                        .build()
+                        )
+                        .toList();
+
+        ReserveTicketsRequest releaseRequest =
+                ReserveTicketsRequest.builder()
+                        .tickets(tickets)
+                        .build();
+
+        eventServiceClient.releaseTickets(
+                request.getEventId(),
+                releaseRequest
+        );
+    }
+
     private Payment simulatePayment(Booking booking, PaymentMethod paymentMethod, BigDecimal amount) {
         PaymentStatus paymentStatus = paymentMethod == PaymentMethod.SIMULATED_FAIL
                 ? PaymentStatus.FAILED
