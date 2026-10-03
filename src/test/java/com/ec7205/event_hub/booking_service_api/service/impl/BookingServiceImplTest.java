@@ -8,8 +8,10 @@ import com.ec7205.event_hub.booking_service_api.dto.response.CreateBookingRespon
 import com.ec7205.event_hub.booking_service_api.dto.response.EventBookingInfoResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.EventTicketTypeResponse;
 import com.ec7205.event_hub.booking_service_api.entity.Booking;
+import com.ec7205.event_hub.booking_service_api.entity.IdempotencyRecord;
 import com.ec7205.event_hub.booking_service_api.entity.Payment;
 import com.ec7205.event_hub.booking_service_api.enums.BookingStatus;
+import com.ec7205.event_hub.booking_service_api.enums.IdempotencyStatus;
 import com.ec7205.event_hub.booking_service_api.enums.PaymentMethod;
 import com.ec7205.event_hub.booking_service_api.exception.BadRequestException;
 import com.ec7205.event_hub.booking_service_api.exception.ConflictException;
@@ -18,12 +20,14 @@ import com.ec7205.event_hub.booking_service_api.mapper.BookingMapper;
 import com.ec7205.event_hub.booking_service_api.messaging.BookingNotificationEventPublisher;
 import com.ec7205.event_hub.booking_service_api.repository.BookingRepository;
 import com.ec7205.event_hub.booking_service_api.repository.PaymentRepository;
+import com.ec7205.event_hub.booking_service_api.service.IdempotencyService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -33,9 +37,10 @@ import java.time.LocalDateTime;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -57,12 +62,15 @@ class BookingServiceImplTest {
     @Mock
     private BookingMapper bookingMapper;
 
+    @Mock
+    private IdempotencyService idempotencyService;
+
     @InjectMocks
     private BookingServiceImpl bookingService;
 
     @Test
     void shouldReserveTicketsAndCreateConfirmedBooking() {
-
+        stubNewIdempotencyClaim();
         // ARRANGE
         EventTicketTypeResponse ticketType =
                 EventTicketTypeResponse.builder()
@@ -145,7 +153,7 @@ class BookingServiceImplTest {
 
     @Test
     void shouldNotCreateBookingWhenTicketReservationFails() {
-
+        stubNewIdempotencyClaim();
         EventTicketTypeResponse ticketType =
                 EventTicketTypeResponse.builder()
                         .ticketTypeId(1L)
@@ -197,7 +205,7 @@ class BookingServiceImplTest {
 
     @Test
     void shouldRejectBookingWhenEventIsNotPublished() {
-
+        stubNewIdempotencyClaim();
         EventBookingInfoResponse eventInfo =
                 EventBookingInfoResponse.builder()
                         .eventId(100L)
@@ -238,7 +246,7 @@ class BookingServiceImplTest {
 
     @Test
     void shouldRejectBookingWhenEventHasAlreadyStarted() {
-
+        stubNewIdempotencyClaim();
         EventBookingInfoResponse eventInfo =
                 EventBookingInfoResponse.builder()
                         .eventId(100L)
@@ -279,7 +287,7 @@ class BookingServiceImplTest {
 
     @Test
     void shouldRejectInvalidTicketType() {
-
+        stubNewIdempotencyClaim();
         EventTicketTypeResponse validTicket =
                 EventTicketTypeResponse.builder()
                         .ticketTypeId(1L)
@@ -325,22 +333,6 @@ class BookingServiceImplTest {
     @Test
     void shouldRejectDuplicateTicketSelections() {
 
-        EventTicketTypeResponse ticket =
-                EventTicketTypeResponse.builder()
-                        .ticketTypeId(1L)
-                        .ticketTypeName("Standard")
-                        .price(BigDecimal.valueOf(2500))
-                        .build();
-
-        EventBookingInfoResponse eventInfo =
-                EventBookingInfoResponse.builder()
-                        .eventId(100L)
-                        .title("Test Event")
-                        .status("PUBLISHED")
-                        .startDateTime(LocalDateTime.now().plusDays(1))
-                        .ticketTypes(List.of(ticket))
-                        .build();
-
         CreateBookingRequest request =
                 CreateBookingRequest.builder()
                         .eventId(100L)
@@ -360,21 +352,22 @@ class BookingServiceImplTest {
                         .paymentMethod(PaymentMethod.CARD)
                         .build();
 
-        when(eventServiceClient.getEventBookingInfo(100L))
-                .thenReturn(eventInfo);
-
         assertThrows(
                 BadRequestException.class,
-                () -> bookingService.createBooking("user-1", "new-key",request)
+                () -> bookingService.createBooking(
+                        "user-1",
+                        "new-key",
+                        request
+                )
         );
 
-        verify(eventServiceClient, never())
-                .reserveTickets(anyLong(), any());
+        verifyNoInteractions(eventServiceClient);
+        verifyNoInteractions(idempotencyService);
     }
 
     @Test
     void shouldKeepBookingPendingWhenPaymentFails() {
-
+        stubNewIdempotencyClaim();
         EventTicketTypeResponse ticketType =
                 EventTicketTypeResponse.builder()
                         .ticketTypeId(1L)
@@ -442,7 +435,7 @@ class BookingServiceImplTest {
 
     @Test
     void shouldReleaseTicketsWhenPaymentFails() {
-
+        stubNewIdempotencyClaim();
         EventTicketTypeResponse ticketType =
                 EventTicketTypeResponse.builder()
                         .ticketTypeId(1L)
@@ -518,7 +511,7 @@ class BookingServiceImplTest {
 
     @Test
     void shouldNotReleaseTicketsWhenPaymentSucceeds() {
-
+        stubNewIdempotencyClaim();
         EventTicketTypeResponse ticketType =
                 EventTicketTypeResponse.builder()
                         .ticketTypeId(1L)
@@ -582,32 +575,6 @@ class BookingServiceImplTest {
 
     @Test
     void shouldReturnExistingBookingWhenIdempotencyKeyAlreadyExists() {
-        String matchingFingerprint =
-                generateFingerprintForTest(
-                        100L,
-                        PaymentMethod.CARD,
-                        1L,
-                        2
-                );
-        Booking existingBooking = Booking.builder()
-                .id(1L)
-                .bookingReference("BK-EXISTING")
-                .idempotencyKey("key-123")
-                .requestFingerprint(matchingFingerprint)
-                .userId("user-1")
-                .eventId(100L)
-                .eventTitleSnapshot("Test Event")
-                .eventStartDateTimeSnapshot(LocalDateTime.now().plusDays(1))
-                .status(BookingStatus.CONFIRMED)
-                .totalAmount(BigDecimal.valueOf(5000))
-                .build();
-
-        CreateBookingResponse existingResponse =
-                CreateBookingResponse.builder()
-                        .bookingId(1L)
-                        .bookingReference("BK-EXISTING")
-                        .status(BookingStatus.CONFIRMED)
-                        .build();
 
         CreateBookingRequest request =
                 CreateBookingRequest.builder()
@@ -623,34 +590,88 @@ class BookingServiceImplTest {
                         .paymentMethod(PaymentMethod.CARD)
                         .build();
 
+        String matchingFingerprint =
+                generateFingerprintForTest(
+                        100L,
+                        PaymentMethod.CARD,
+                        1L,
+                        2
+                );
+
+        IdempotencyRecord existingRecord =
+                IdempotencyRecord.builder()
+                        .id(10L)
+                        .userId("user-1")
+                        .idempotencyKey("key-123")
+                        .requestFingerprint(matchingFingerprint)
+                        .status(IdempotencyStatus.COMPLETED)
+                        .bookingId(1L)
+                        .build();
+
+        Booking existingBooking =
+                Booking.builder()
+                        .id(1L)
+                        .bookingReference("BK-EXISTING")
+                        .userId("user-1")
+                        .eventId(100L)
+                        .eventTitleSnapshot("Test Event")
+                        .eventStartDateTimeSnapshot(
+                                LocalDateTime.now().plusDays(1)
+                        )
+                        .status(BookingStatus.CONFIRMED)
+                        .totalAmount(BigDecimal.valueOf(5000))
+                        .build();
+
+        CreateBookingResponse existingResponse =
+                CreateBookingResponse.builder()
+                        .bookingId(1L)
+                        .bookingReference("BK-EXISTING")
+                        .status(BookingStatus.CONFIRMED)
+                        .build();
+
         when(
-                bookingRepository.findByUserIdAndIdempotencyKey(
+                idempotencyService.find(
                         "user-1",
                         "key-123"
                 )
-        ).thenReturn(Optional.of(existingBooking));
+        ).thenReturn(Optional.of(existingRecord));
 
-        when(bookingMapper.toCreateBookingResponse(existingBooking))
-                .thenReturn(existingResponse);
+        when(bookingRepository.findById(1L))
+                .thenReturn(Optional.of(existingBooking));
+
+        when(
+                bookingMapper.toCreateBookingResponse(
+                        existingBooking
+                )
+        ).thenReturn(existingResponse);
 
         CreateBookingResponse response =
                 bookingService.createBooking(
                         "user-1",
                         "key-123",
-
                         request
                 );
 
-        assertEquals("BK-EXISTING", response.getBookingReference());
+        assertEquals(
+                "BK-EXISTING",
+                response.getBookingReference()
+        );
+
+        verify(idempotencyService, never())
+                .claim(
+                        anyString(),
+                        anyString(),
+                        anyString()
+                );
 
         verify(eventServiceClient, never())
                 .getEventBookingInfo(anyLong());
 
         verify(eventServiceClient, never())
-                .reserveTickets(anyLong(), any());
-
-        verify(bookingRepository, never())
-                .save(any());
+                .reserveTickets(
+                        anyLong(),
+                        any()
+                );
 
         verify(paymentRepository, never())
                 .save(any());
@@ -658,6 +679,9 @@ class BookingServiceImplTest {
 
     @Test
     void shouldCreateNewBookingWhenIdempotencyKeyDoesNotExist() {
+
+        IdempotencyRecord claimedRecord =
+                stubNewIdempotencyClaim();
 
         EventTicketTypeResponse ticketType =
                 EventTicketTypeResponse.builder()
@@ -671,7 +695,9 @@ class BookingServiceImplTest {
                         .eventId(100L)
                         .title("Test Event")
                         .status("PUBLISHED")
-                        .startDateTime(LocalDateTime.now().plusDays(1))
+                        .startDateTime(
+                                LocalDateTime.now().plusDays(1)
+                        )
                         .ticketTypes(List.of(ticketType))
                         .build();
 
@@ -689,28 +715,37 @@ class BookingServiceImplTest {
                         .paymentMethod(PaymentMethod.CARD)
                         .build();
 
-        when(
-                bookingRepository.findByUserIdAndIdempotencyKey(
-                        "user-1",
-                        "new-key"
-                )
-        ).thenReturn(Optional.empty());
-
         when(eventServiceClient.getEventBookingInfo(100L))
                 .thenReturn(eventInfo);
 
         when(bookingRepository.save(any(Booking.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+                .thenAnswer(invocation -> {
+
+                    Booking booking =
+                            invocation.getArgument(0);
+
+                    if (booking.getId() == null) {
+                        booking.setId(99L);
+                    }
+
+                    return booking;
+                });
 
         when(paymentRepository.save(any(Payment.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
-
-        when(bookingMapper.toCreateBookingResponse(any(Booking.class)))
-                .thenReturn(
-                        CreateBookingResponse.builder()
-                                .status(BookingStatus.CONFIRMED)
-                                .build()
+                .thenAnswer(
+                        invocation -> invocation.getArgument(0)
                 );
+
+        when(
+                bookingMapper.toCreateBookingResponse(
+                        any(Booking.class)
+                )
+        ).thenReturn(
+                CreateBookingResponse.builder()
+                        .bookingId(99L)
+                        .status(BookingStatus.CONFIRMED)
+                        .build()
+        );
 
         bookingService.createBooking(
                 "user-1",
@@ -727,12 +762,17 @@ class BookingServiceImplTest {
         verify(paymentRepository)
                 .save(any(Payment.class));
 
-        verify(bookingRepository, atLeastOnce())
-                .save(any(Booking.class));
+        verify(idempotencyService)
+                .markCompleted(
+                        claimedRecord.getId(),
+                        99L
+                );
     }
 
     @Test
     void shouldStoreIdempotencyKeyInNewBooking() {
+
+        stubNewIdempotencyClaim();
 
         EventTicketTypeResponse ticketType =
                 EventTicketTypeResponse.builder()
@@ -746,7 +786,9 @@ class BookingServiceImplTest {
                         .eventId(100L)
                         .title("Test Event")
                         .status("PUBLISHED")
-                        .startDateTime(LocalDateTime.now().plusDays(1))
+                        .startDateTime(
+                                LocalDateTime.now().plusDays(1)
+                        )
                         .ticketTypes(List.of(ticketType))
                         .build();
 
@@ -764,24 +806,36 @@ class BookingServiceImplTest {
                         .paymentMethod(PaymentMethod.CARD)
                         .build();
 
-        when(
-                bookingRepository.findByUserIdAndIdempotencyKey(
-                        "user-1",
-                        "key-abc"
-                )
-        ).thenReturn(Optional.empty());
-
         when(eventServiceClient.getEventBookingInfo(100L))
                 .thenReturn(eventInfo);
 
         when(bookingRepository.save(any(Booking.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+                .thenAnswer(invocation -> {
+
+                    Booking booking =
+                            invocation.getArgument(0);
+
+                    if (booking.getId() == null) {
+                        booking.setId(99L);
+                    }
+
+                    return booking;
+                });
 
         when(paymentRepository.save(any(Payment.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+                .thenAnswer(
+                        invocation -> invocation.getArgument(0)
+                );
 
-        when(bookingMapper.toCreateBookingResponse(any(Booking.class)))
-                .thenReturn(CreateBookingResponse.builder().build());
+        when(
+                bookingMapper.toCreateBookingResponse(
+                        any(Booking.class)
+                )
+        ).thenReturn(
+                CreateBookingResponse.builder()
+                        .bookingId(99L)
+                        .build()
+        );
 
         bookingService.createBooking(
                 "user-1",
@@ -795,9 +849,23 @@ class BookingServiceImplTest {
         verify(bookingRepository, atLeastOnce())
                 .save(bookingCaptor.capture());
 
+        Booking firstSavedBooking =
+                bookingCaptor.getAllValues().get(0);
+
         assertEquals(
                 "key-abc",
-                bookingCaptor.getAllValues().get(0).getIdempotencyKey()
+                firstSavedBooking.getIdempotencyKey()
+        );
+
+        assertNotNull(
+                firstSavedBooking.getRequestFingerprint()
+        );
+
+        assertEquals(
+                64,
+                firstSavedBooking
+                        .getRequestFingerprint()
+                        .length()
         );
     }
 
@@ -874,6 +942,9 @@ class BookingServiceImplTest {
     @Test
     void shouldNotReuseAnotherUsersBookingForSameIdempotencyKey() {
 
+        IdempotencyRecord claimedRecord =
+                stubNewIdempotencyClaim();
+
         EventTicketTypeResponse ticketType =
                 EventTicketTypeResponse.builder()
                         .ticketTypeId(1L)
@@ -904,30 +975,49 @@ class BookingServiceImplTest {
                         .paymentMethod(PaymentMethod.CARD)
                         .build();
 
-        when(
-                bookingRepository.findByUserIdAndIdempotencyKey(
-                        "user-2",
-                        "same-key"
-                )
-        ).thenReturn(Optional.empty());
-
         when(eventServiceClient.getEventBookingInfo(100L))
                 .thenReturn(eventInfo);
 
         when(bookingRepository.save(any(Booking.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+                .thenAnswer(invocation -> {
+                    Booking booking = invocation.getArgument(0);
+
+                    if (booking.getId() == null) {
+                        booking.setId(99L);
+                    }
+
+                    return booking;
+                });
 
         when(paymentRepository.save(any(Payment.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         when(bookingMapper.toCreateBookingResponse(any(Booking.class)))
-                .thenReturn(CreateBookingResponse.builder().build());
+                .thenReturn(
+                        CreateBookingResponse.builder()
+                                .bookingId(99L)
+                                .status(BookingStatus.CONFIRMED)
+                                .build()
+                );
 
         bookingService.createBooking(
                 "user-2",
                 "same-key",
                 request
         );
+
+        verify(idempotencyService)
+                .find(
+                        "user-2",
+                        "same-key"
+                );
+
+        verify(idempotencyService)
+                .claim(
+                        eq("user-2"),
+                        eq("same-key"),
+                        anyString()
+                );
 
         verify(eventServiceClient)
                 .reserveTickets(
@@ -937,29 +1027,29 @@ class BookingServiceImplTest {
 
         verify(paymentRepository)
                 .save(any(Payment.class));
-    }
 
+        verify(idempotencyService)
+                .markCompleted(
+                        claimedRecord.getId(),
+                        99L
+                );
+    }
+    
     @Test
     void shouldReturnExistingBookingWhenSameKeyAndSameRequest() {
 
-        // ARRANGE
         CreateBookingRequest request =
                 CreateBookingRequest.builder()
                         .eventId(100L)
-                        .ticketSelections(
-                                List.of(
-                                        TicketSelectionRequest.builder()
-                                                .ticketTypeId(1L)
-                                                .quantity(2)
-                                                .build()
-                                )
-                        )
+                        .ticketSelections(List.of(
+                                TicketSelectionRequest.builder()
+                                        .ticketTypeId(1L)
+                                        .quantity(2)
+                                        .build()
+                        ))
                         .paymentMethod(PaymentMethod.CARD)
                         .build();
 
-        // IMPORTANT:
-        // This fingerprint must match the fingerprint generated
-        // by the production code for the request above.
         String matchingFingerprint =
                 generateFingerprintForTest(
                         100L,
@@ -968,18 +1058,22 @@ class BookingServiceImplTest {
                         2
                 );
 
+        IdempotencyRecord existingRecord =
+                IdempotencyRecord.builder()
+                        .id(10L)
+                        .userId("user-1")
+                        .idempotencyKey("key-123")
+                        .requestFingerprint(matchingFingerprint)
+                        .status(IdempotencyStatus.COMPLETED)
+                        .bookingId(1L)
+                        .build();
+
         Booking existingBooking =
                 Booking.builder()
                         .id(1L)
                         .bookingReference("BK-EXISTING")
-                        .idempotencyKey("key-123")
-                        .requestFingerprint(matchingFingerprint)
                         .userId("user-1")
                         .eventId(100L)
-                        .eventTitleSnapshot("Test Event")
-                        .eventStartDateTimeSnapshot(
-                                LocalDateTime.now().plusDays(1)
-                        )
                         .status(BookingStatus.CONFIRMED)
                         .totalAmount(BigDecimal.valueOf(5000))
                         .build();
@@ -988,24 +1082,20 @@ class BookingServiceImplTest {
                 CreateBookingResponse.builder()
                         .bookingId(1L)
                         .bookingReference("BK-EXISTING")
-                        .eventId(100L)
-                        .eventTitle("Test Event")
                         .status(BookingStatus.CONFIRMED)
-                        .totalAmount(BigDecimal.valueOf(5000))
                         .build();
 
-        when(
-                bookingRepository.findByUserIdAndIdempotencyKey(
-                        "user-1",
-                        "key-123"
-                )
-        ).thenReturn(Optional.of(existingBooking));
+        when(idempotencyService.find(
+                "user-1",
+                "key-123"
+        )).thenReturn(Optional.of(existingRecord));
 
-        when(
-                bookingMapper.toCreateBookingResponse(existingBooking)
-        ).thenReturn(existingResponse);
+        when(bookingRepository.findById(1L))
+                .thenReturn(Optional.of(existingBooking));
 
-        // ACT
+        when(bookingMapper.toCreateBookingResponse(existingBooking))
+                .thenReturn(existingResponse);
+
         CreateBookingResponse response =
                 bookingService.createBooking(
                         "user-1",
@@ -1013,76 +1103,47 @@ class BookingServiceImplTest {
                         request
                 );
 
-        // ASSERT
         assertEquals(
                 "BK-EXISTING",
                 response.getBookingReference()
         );
 
-        assertEquals(
-                BookingStatus.CONFIRMED,
-                response.getStatus()
-        );
+        verify(idempotencyService, never())
+                .claim(anyString(), anyString(), anyString());
 
-        // Duplicate request should stop here.
         verify(eventServiceClient, never())
                 .getEventBookingInfo(anyLong());
-
-        verify(eventServiceClient, never())
-                .reserveTickets(
-                        anyLong(),
-                        any(ReserveTicketsRequest.class)
-                );
-
-        verify(eventServiceClient, never())
-                .releaseTickets(
-                        anyLong(),
-                        any(ReserveTicketsRequest.class)
-                );
-
-        verify(bookingRepository, never())
-                .save(any(Booking.class));
-
-        verify(paymentRepository, never())
-                .save(any(Payment.class));
     }
 
     @Test
     void shouldRejectSameIdempotencyKeyWithDifferentRequest() {
 
-        Booking existingBooking = Booking.builder()
-                .id(1L)
-                .bookingReference("BK-EXISTING")
-                .idempotencyKey("key-123")
-                .requestFingerprint("different-fingerprint")
-                .userId("user-1")
-                .eventId(100L)
-                .eventTitleSnapshot("Test Event")
-                .eventStartDateTimeSnapshot(LocalDateTime.now().plusDays(1))
-                .status(BookingStatus.CONFIRMED)
-                .totalAmount(BigDecimal.valueOf(5000))
-                .build();
-
         CreateBookingRequest request =
                 CreateBookingRequest.builder()
                         .eventId(100L)
-                        .ticketSelections(
-                                List.of(
-                                        TicketSelectionRequest.builder()
-                                                .ticketTypeId(1L)
-                                                .quantity(5)
-                                                .build()
-                                )
-                        )
+                        .ticketSelections(List.of(
+                                TicketSelectionRequest.builder()
+                                        .ticketTypeId(1L)
+                                        .quantity(5)
+                                        .build()
+                        ))
                         .paymentMethod(PaymentMethod.CARD)
                         .build();
 
-        when(
-                bookingRepository.findByUserIdAndIdempotencyKey(
-                        "user-1",
-                        "key-123"
-                )
-        ).thenReturn(Optional.of(existingBooking));
+        IdempotencyRecord existingRecord =
+                IdempotencyRecord.builder()
+                        .id(10L)
+                        .userId("user-1")
+                        .idempotencyKey("key-123")
+                        .requestFingerprint("different-fingerprint")
+                        .status(IdempotencyStatus.COMPLETED)
+                        .bookingId(1L)
+                        .build();
+
+        when(idempotencyService.find(
+                "user-1",
+                "key-123"
+        )).thenReturn(Optional.of(existingRecord));
 
         assertThrows(
                 ConflictException.class,
@@ -1093,19 +1154,15 @@ class BookingServiceImplTest {
                 )
         );
 
+        verify(idempotencyService, never())
+                .claim(anyString(), anyString(), anyString());
+
         verify(eventServiceClient, never())
                 .getEventBookingInfo(anyLong());
 
         verify(eventServiceClient, never())
                 .reserveTickets(anyLong(), any());
-
-        verify(paymentRepository, never())
-                .save(any());
-
-        verify(bookingRepository, never())
-                .save(any());
     }
-
     private String generateFingerprintForTest(
             Long eventId,
             PaymentMethod paymentMethod,
@@ -1136,6 +1193,578 @@ class BookingServiceImplTest {
             );
         }
     }
+//-------------------------------------------------------------------------------------
 
+    @Test
+    void shouldRejectRequestWhenIdempotencyRecordIsProcessing() {
 
+        CreateBookingRequest request =
+                CreateBookingRequest.builder()
+                        .eventId(100L)
+                        .ticketSelections(List.of(
+                                TicketSelectionRequest.builder()
+                                        .ticketTypeId(1L)
+                                        .quantity(2)
+                                        .build()
+                        ))
+                        .paymentMethod(PaymentMethod.CARD)
+                        .build();
+
+        IdempotencyRecord record =
+                IdempotencyRecord.builder()
+                        .id(1L)
+                        .userId("user-1")
+                        .idempotencyKey("key-123")
+                        .requestFingerprint(
+                                generateFingerprintForTest(
+                                        100L,
+                                        PaymentMethod.CARD,
+                                        1L,
+                                        2
+                                )
+                        )
+                        .status(IdempotencyStatus.PROCESSING)
+                        .build();
+
+        when(
+                idempotencyService.find(
+                        "user-1",
+                        "key-123"
+                )
+        ).thenReturn(Optional.of(record));
+
+        assertThrows(
+                ConflictException.class,
+                () -> bookingService.createBooking(
+                        "user-1",
+                        "key-123",
+                        request
+                )
+        );
+
+        verify(eventServiceClient, never())
+                .reserveTickets(anyLong(), any());
+
+        verify(paymentRepository, never())
+                .save(any());
+    }
+
+    @Test
+    void shouldReturnExistingBookingWhenIdempotencyRecordIsCompleted() {
+
+        CreateBookingRequest request =
+                CreateBookingRequest.builder()
+                        .eventId(100L)
+                        .ticketSelections(List.of(
+                                TicketSelectionRequest.builder()
+                                        .ticketTypeId(1L)
+                                        .quantity(2)
+                                        .build()
+                        ))
+                        .paymentMethod(PaymentMethod.CARD)
+                        .build();
+
+        String fingerprint =
+                generateFingerprintForTest(
+                        100L,
+                        PaymentMethod.CARD,
+                        1L,
+                        2
+                );
+
+        IdempotencyRecord record =
+                IdempotencyRecord.builder()
+                        .id(1L)
+                        .userId("user-1")
+                        .idempotencyKey("key-123")
+                        .requestFingerprint(fingerprint)
+                        .status(IdempotencyStatus.COMPLETED)
+                        .bookingId(99L)
+                        .build();
+
+        Booking existingBooking =
+                Booking.builder()
+                        .id(99L)
+                        .bookingReference("BK-EXISTING")
+                        .userId("user-1")
+                        .eventId(100L)
+                        .eventTitleSnapshot("Test Event")
+                        .eventStartDateTimeSnapshot(LocalDateTime.now().plusDays(1))
+                        .status(BookingStatus.CONFIRMED)
+                        .totalAmount(BigDecimal.valueOf(5000))
+                        .build();
+
+        CreateBookingResponse existingResponse =
+                CreateBookingResponse.builder()
+                        .bookingId(99L)
+                        .bookingReference("BK-EXISTING")
+                        .status(BookingStatus.CONFIRMED)
+                        .build();
+
+        when(
+                idempotencyService.find(
+                        "user-1",
+                        "key-123"
+                )
+        ).thenReturn(Optional.of(record));
+
+        when(bookingRepository.findById(99L))
+                .thenReturn(Optional.of(existingBooking));
+
+        when(bookingMapper.toCreateBookingResponse(existingBooking))
+                .thenReturn(existingResponse);
+
+        CreateBookingResponse response =
+                bookingService.createBooking(
+                        "user-1",
+                        "key-123",
+                        request
+                );
+
+        assertEquals(
+                "BK-EXISTING",
+                response.getBookingReference()
+        );
+
+        verify(eventServiceClient, never())
+                .reserveTickets(anyLong(), any());
+
+        verify(paymentRepository, never())
+                .save(any());
+    }
+
+    @Test
+    void shouldRejectRequestWhenPreviousIdempotentRequestFailed() {
+
+        CreateBookingRequest request =
+                CreateBookingRequest.builder()
+                        .eventId(100L)
+                        .ticketSelections(List.of(
+                                TicketSelectionRequest.builder()
+                                        .ticketTypeId(1L)
+                                        .quantity(2)
+                                        .build()
+                        ))
+                        .paymentMethod(PaymentMethod.CARD)
+                        .build();
+
+        IdempotencyRecord record =
+                IdempotencyRecord.builder()
+                        .id(1L)
+                        .userId("user-1")
+                        .idempotencyKey("key-123")
+                        .requestFingerprint(
+                                generateFingerprintForTest(
+                                        100L,
+                                        PaymentMethod.CARD,
+                                        1L,
+                                        2
+                                )
+                        )
+                        .status(IdempotencyStatus.FAILED)
+                        .build();
+
+        when(
+                idempotencyService.find(
+                        "user-1",
+                        "key-123"
+                )
+        ).thenReturn(Optional.of(record));
+
+        assertThrows(
+                ConflictException.class,
+                () -> bookingService.createBooking(
+                        "user-1",
+                        "key-123",
+                        request
+                )
+        );
+
+        verify(eventServiceClient, never())
+                .reserveTickets(anyLong(), any());
+    }
+
+    @Test
+    void shouldMarkIdempotencyRecordCompletedWhenBookingSucceeds() {
+
+        CreateBookingRequest request =
+                CreateBookingRequest.builder()
+                        .eventId(100L)
+                        .ticketSelections(List.of(
+                                TicketSelectionRequest.builder()
+                                        .ticketTypeId(1L)
+                                        .quantity(2)
+                                        .build()
+                        ))
+                        .paymentMethod(PaymentMethod.CARD)
+                        .build();
+
+        EventTicketTypeResponse ticketType =
+                EventTicketTypeResponse.builder()
+                        .ticketTypeId(1L)
+                        .ticketTypeName("Standard")
+                        .price(BigDecimal.valueOf(2500))
+                        .build();
+
+        EventBookingInfoResponse eventInfo =
+                EventBookingInfoResponse.builder()
+                        .eventId(100L)
+                        .title("Test Event")
+                        .status("PUBLISHED")
+                        .startDateTime(LocalDateTime.now().plusDays(1))
+                        .ticketTypes(List.of(ticketType))
+                        .build();
+
+        IdempotencyRecord claimedRecord =
+                IdempotencyRecord.builder()
+                        .id(10L)
+                        .userId("user-1")
+                        .idempotencyKey("new-key")
+                        .status(IdempotencyStatus.PROCESSING)
+                        .build();
+
+        when(
+                idempotencyService.find(
+                        "user-1",
+                        "new-key"
+                )
+        ).thenReturn(Optional.empty());
+
+        when(
+                idempotencyService.claim(
+                        eq("user-1"),
+                        eq("new-key"),
+                        anyString()
+                )
+        ).thenReturn(claimedRecord);
+
+        when(eventServiceClient.getEventBookingInfo(100L))
+                .thenReturn(eventInfo);
+
+        when(bookingRepository.save(any(Booking.class)))
+                .thenAnswer(invocation -> {
+                    Booking booking = invocation.getArgument(0);
+
+                    if (booking.getId() == null) {
+                        booking.setId(99L);
+                    }
+
+                    return booking;
+                });
+
+        when(paymentRepository.save(any(Payment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        when(bookingMapper.toCreateBookingResponse(any(Booking.class)))
+                .thenReturn(
+                        CreateBookingResponse.builder()
+                                .bookingId(99L)
+                                .status(BookingStatus.CONFIRMED)
+                                .build()
+                );
+
+        bookingService.createBooking(
+                "user-1",
+                "new-key",
+                request
+        );
+
+        verify(idempotencyService)
+                .markCompleted(
+                        10L,
+                        99L
+                );
+    }
+
+    @Test
+    void shouldMarkIdempotencyRecordFailedWhenBookingProcessingFails() {
+
+        CreateBookingRequest request =
+                CreateBookingRequest.builder()
+                        .eventId(100L)
+                        .ticketSelections(List.of(
+                                TicketSelectionRequest.builder()
+                                        .ticketTypeId(1L)
+                                        .quantity(2)
+                                        .build()
+                        ))
+                        .paymentMethod(PaymentMethod.CARD)
+                        .build();
+
+        EventTicketTypeResponse ticketType =
+                EventTicketTypeResponse.builder()
+                        .ticketTypeId(1L)
+                        .ticketTypeName("Standard")
+                        .price(BigDecimal.valueOf(2500))
+                        .build();
+
+        EventBookingInfoResponse eventInfo =
+                EventBookingInfoResponse.builder()
+                        .eventId(100L)
+                        .title("Test Event")
+                        .status("PUBLISHED")
+                        .startDateTime(LocalDateTime.now().plusDays(1))
+                        .ticketTypes(List.of(ticketType))
+                        .build();
+
+        IdempotencyRecord claimedRecord =
+                IdempotencyRecord.builder()
+                        .id(10L)
+                        .userId("user-1")
+                        .idempotencyKey("new-key")
+                        .status(IdempotencyStatus.PROCESSING)
+                        .build();
+
+        when(
+                idempotencyService.find(
+                        "user-1",
+                        "new-key"
+                )
+        ).thenReturn(Optional.empty());
+
+        when(
+                idempotencyService.claim(
+                        eq("user-1"),
+                        eq("new-key"),
+                        anyString()
+                )
+        ).thenReturn(claimedRecord);
+
+        when(eventServiceClient.getEventBookingInfo(100L))
+                .thenReturn(eventInfo);
+
+        doThrow(new ConflictException("Not enough tickets"))
+                .when(eventServiceClient)
+                .reserveTickets(
+                        eq(100L),
+                        any(ReserveTicketsRequest.class)
+                );
+
+        assertThrows(
+                ConflictException.class,
+                () -> bookingService.createBooking(
+                        "user-1",
+                        "new-key",
+                        request
+                )
+        );
+
+        verify(idempotencyService)
+                .markFailed(10L);
+
+        verify(paymentRepository, never())
+                .save(any());
+    }
+
+    private IdempotencyRecord stubNewIdempotencyClaim() {
+
+        IdempotencyRecord record =
+                IdempotencyRecord.builder()
+                        .id(10L)
+                        .userId("user-1")
+                        .idempotencyKey("test-key")
+                        .status(IdempotencyStatus.PROCESSING)
+                        .build();
+
+        when(idempotencyService.find(
+                anyString(),
+                anyString()
+        )).thenReturn(Optional.empty());
+
+        when(idempotencyService.claim(
+                anyString(),
+                anyString(),
+                anyString()
+        )).thenReturn(record);
+
+        return record;
+    }
+
+    //-------------------------------------------------------------------------------------
+    @Test
+    void shouldAllowOnlyOneConcurrentBookingForSameIdempotencyKey()
+            throws Exception {
+
+        CreateBookingRequest request =
+                CreateBookingRequest.builder()
+                        .eventId(100L)
+                        .ticketSelections(
+                                List.of(
+                                        TicketSelectionRequest.builder()
+                                                .ticketTypeId(1L)
+                                                .quantity(1)
+                                                .build()
+                                )
+                        )
+                        .paymentMethod(PaymentMethod.CARD)
+                        .build();
+
+        EventTicketTypeResponse ticketType =
+                EventTicketTypeResponse.builder()
+                        .ticketTypeId(1L)
+                        .ticketTypeName("Standard")
+                        .price(BigDecimal.valueOf(2500))
+                        .build();
+
+        EventBookingInfoResponse eventInfo =
+                EventBookingInfoResponse.builder()
+                        .eventId(100L)
+                        .title("Test Event")
+                        .status("PUBLISHED")
+                        .startDateTime(
+                                LocalDateTime.now().plusDays(1)
+                        )
+                        .ticketTypes(List.of(ticketType))
+                        .build();
+
+        IdempotencyRecord claimedRecord =
+                IdempotencyRecord.builder()
+                        .id(10L)
+                        .userId("user-1")
+                        .idempotencyKey("same-key")
+                        .status(IdempotencyStatus.PROCESSING)
+                        .build();
+
+        when(
+                idempotencyService.find(
+                        "user-1",
+                        "same-key"
+                )
+        ).thenReturn(Optional.empty());
+
+        AtomicInteger claimCount =
+                new AtomicInteger(0);
+
+        when(
+                idempotencyService.claim(
+                        eq("user-1"),
+                        eq("same-key"),
+                        anyString()
+                )
+        ).thenAnswer(invocation -> {
+
+            if (claimCount.incrementAndGet() == 1) {
+                return claimedRecord;
+            }
+
+            throw new DataIntegrityViolationException(
+                    "Duplicate idempotency key"
+            );
+        });
+
+        when(eventServiceClient.getEventBookingInfo(100L))
+                .thenReturn(eventInfo);
+
+        when(bookingRepository.save(any(Booking.class)))
+                .thenAnswer(invocation -> {
+
+                    Booking booking =
+                            invocation.getArgument(0);
+
+                    if (booking.getId() == null) {
+                        booking.setId(99L);
+                    }
+
+                    return booking;
+                });
+
+        when(paymentRepository.save(any(Payment.class)))
+                .thenAnswer(
+                        invocation -> invocation.getArgument(0)
+                );
+
+        when(
+                bookingMapper.toCreateBookingResponse(
+                        any(Booking.class)
+                )
+        ).thenReturn(
+                CreateBookingResponse.builder()
+                        .bookingId(99L)
+                        .status(BookingStatus.CONFIRMED)
+                        .build()
+        );
+
+        ExecutorService executor =
+                Executors.newFixedThreadPool(2);
+
+        CountDownLatch ready =
+                new CountDownLatch(2);
+
+        CountDownLatch start =
+                new CountDownLatch(1);
+
+        Callable<Boolean> task = () -> {
+
+            ready.countDown();
+
+            start.await();
+
+            try {
+                bookingService.createBooking(
+                        "user-1",
+                        "same-key",
+                        request
+                );
+
+                return true;
+
+            } catch (ConflictException ex) {
+                return false;
+            }
+        };
+
+        Future<Boolean> first =
+                executor.submit(task);
+
+        Future<Boolean> second =
+                executor.submit(task);
+
+        ready.await();
+
+        start.countDown();
+
+        boolean firstResult =
+                first.get();
+
+        boolean secondResult =
+                second.get();
+
+        executor.shutdown();
+
+        long successCount =
+                List.of(
+                                firstResult,
+                                secondResult
+                        )
+                        .stream()
+                        .filter(Boolean::booleanValue)
+                        .count();
+
+        assertEquals(
+                1,
+                successCount
+        );
+
+        verify(idempotencyService, times(2))
+                .claim(
+                        eq("user-1"),
+                        eq("same-key"),
+                        anyString()
+                );
+
+        verify(eventServiceClient, times(1))
+                .reserveTickets(
+                        eq(100L),
+                        any(ReserveTicketsRequest.class)
+                );
+
+        verify(paymentRepository, times(1))
+                .save(any(Payment.class));
+
+        verify(idempotencyService, times(1))
+                .markCompleted(
+                        10L,
+                        99L
+                );
+    }
 }

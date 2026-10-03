@@ -14,8 +14,10 @@ import com.ec7205.event_hub.booking_service_api.dto.response.EventTicketTypeResp
 import com.ec7205.event_hub.booking_service_api.dto.response.pagination.BookingPaginateResponseDto;
 import com.ec7205.event_hub.booking_service_api.entity.Booking;
 import com.ec7205.event_hub.booking_service_api.entity.BookingItem;
+import com.ec7205.event_hub.booking_service_api.entity.IdempotencyRecord;
 import com.ec7205.event_hub.booking_service_api.entity.Payment;
 import com.ec7205.event_hub.booking_service_api.enums.BookingStatus;
+import com.ec7205.event_hub.booking_service_api.enums.IdempotencyStatus;
 import com.ec7205.event_hub.booking_service_api.enums.PaymentMethod;
 import com.ec7205.event_hub.booking_service_api.enums.PaymentStatus;
 import com.ec7205.event_hub.booking_service_api.exception.BadRequestException;
@@ -29,8 +31,10 @@ import com.ec7205.event_hub.booking_service_api.messaging.dto.BookingNotificatio
 import com.ec7205.event_hub.booking_service_api.repository.BookingRepository;
 import com.ec7205.event_hub.booking_service_api.repository.PaymentRepository;
 import com.ec7205.event_hub.booking_service_api.service.BookingService;
+import com.ec7205.event_hub.booking_service_api.service.IdempotencyService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.core.Authentication;
@@ -44,6 +48,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.stream.Collectors;
+
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -64,6 +69,7 @@ public class BookingServiceImpl implements BookingService {
     private final EventServiceClient eventServiceClient;
     private final BookingNotificationEventPublisher bookingNotificationEventPublisher;
     private final BookingMapper bookingMapper;
+    private final IdempotencyService idempotencyService;
 
     @Override
     @Transactional(noRollbackFor = PaymentFailedException.class)
@@ -75,19 +81,27 @@ public class BookingServiceImpl implements BookingService {
         validateCreateRequest(userId, request);
 
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
-            throw new BadRequestException("Idempotency-Key header is required");
+            throw new BadRequestException(
+                    "Idempotency-Key header is required"
+            );
         }
+
         String requestFingerprint =
                 generateRequestFingerprint(request);
-        Booking existingBooking =
-                bookingRepository
-                        .findByUserIdAndIdempotencyKey(userId, idempotencyKey)
-                        .orElse(null);
 
-        if (existingBooking != null) {
+        Optional<IdempotencyRecord> existingRecord =
+                idempotencyService.find(
+                        userId,
+                        idempotencyKey
+                );
+
+        if (existingRecord.isPresent()) {
+
+            IdempotencyRecord existing =
+                    existingRecord.get();
 
             if (!Objects.equals(
-                    existingBooking.getRequestFingerprint(),
+                    existing.getRequestFingerprint(),
                     requestFingerprint
             )) {
                 throw new ConflictException(
@@ -95,82 +109,180 @@ public class BookingServiceImpl implements BookingService {
                 );
             }
 
-            return bookingMapper.toCreateBookingResponse(existingBooking);
-        }
-
-        EventBookingInfoResponse eventInfo =
-                eventServiceClient.getEventBookingInfo(request.getEventId());
-
-        validateEventForBooking(eventInfo);
-
-        Map<Long, EventTicketTypeResponse> ticketTypeMap =
-                validateAndMapTicketTypes(request, eventInfo);
-
-        Booking booking =
-                initializeBooking(userId, idempotencyKey,requestFingerprint, eventInfo);
-
-        reserveRequestedTickets(request);
-
-        BigDecimal totalAmount = BigDecimal.ZERO;
-
-        for (TicketSelectionRequest selection : request.getTicketSelections()) {
-            EventTicketTypeResponse ticketType =
-                    ticketTypeMap.get(selection.getTicketTypeId());
-
-            BigDecimal subtotal =
-                    ticketType.getPrice()
-                            .multiply(BigDecimal.valueOf(selection.getQuantity()));
-
-            BookingItem item = BookingItem.builder()
-                    .ticketTypeId(ticketType.getTicketTypeId())
-                    .ticketTypeNameSnapshot(ticketType.getTicketTypeName())
-                    .unitPrice(ticketType.getPrice())
-                    .quantity(selection.getQuantity())
-                    .subtotal(subtotal)
-                    .build();
-
-            booking.addItem(item);
-            totalAmount = totalAmount.add(subtotal);
-        }
-
-        booking.setTotalAmount(totalAmount);
-
-        Booking savedBooking =
-                bookingRepository.save(booking);
-
-        Payment payment =
-                simulatePayment(
-                        savedBooking,
-                        request.getPaymentMethod(),
-                        totalAmount
+            if (existing.getStatus() == IdempotencyStatus.PROCESSING) {
+                throw new ConflictException(
+                        "A request with this idempotency key is already being processed"
                 );
+            }
 
-        paymentRepository.save(payment);
+            if (existing.getStatus() == IdempotencyStatus.COMPLETED) {
 
-        if (payment.getStatus() == PaymentStatus.FAILED) {
+                Booking booking =
+                        bookingRepository.findById(
+                                existing.getBookingId()
+                        ).orElseThrow(
+                                () -> new ResourceNotFoundException(
+                                        "Booking linked to idempotency record was not found"
+                                )
+                        );
 
-            releaseRequestedTickets(request);
+                return bookingMapper
+                        .toCreateBookingResponse(booking);
+            }
 
-            savedBooking.setStatus(BookingStatus.PENDING);
-            savedBooking.setPayment(payment);
+            if (existing.getStatus() == IdempotencyStatus.FAILED) {
+                throw new ConflictException(
+                        "Previous request with this idempotency key failed"
+                );
+            }
+        }
 
-            bookingRepository.save(savedBooking);
+        IdempotencyRecord record;
 
-            throw new PaymentFailedException(
-                    "Payment failed for booking reference: "
-                            + savedBooking.getBookingReference()
+        try {
+            record = idempotencyService.claim(
+                    userId,
+                    idempotencyKey,
+                    requestFingerprint
+            );
+        } catch (DataIntegrityViolationException ex) {
+            throw new ConflictException(
+                    "A request with this idempotency key is already being processed"
             );
         }
 
-        savedBooking.setStatus(BookingStatus.CONFIRMED);
-        savedBooking.setPayment(payment);
+        try {
 
-        Booking confirmedBooking =
+            EventBookingInfoResponse eventInfo =
+                    eventServiceClient
+                            .getEventBookingInfo(
+                                    request.getEventId()
+                            );
+
+            validateEventForBooking(eventInfo);
+
+            Map<Long, EventTicketTypeResponse> ticketTypeMap =
+                    validateAndMapTicketTypes(
+                            request,
+                            eventInfo
+                    );
+
+            Booking booking =
+                    initializeBooking(
+                            userId,
+                            idempotencyKey,
+                            requestFingerprint,
+                            eventInfo
+                    );
+
+            reserveRequestedTickets(request);
+
+            BigDecimal totalAmount =
+                    BigDecimal.ZERO;
+
+            for (TicketSelectionRequest selection
+                    : request.getTicketSelections()) {
+
+                EventTicketTypeResponse ticketType =
+                        ticketTypeMap.get(
+                                selection.getTicketTypeId()
+                        );
+
+                BigDecimal subtotal =
+                        ticketType.getPrice()
+                                .multiply(
+                                        BigDecimal.valueOf(
+                                                selection.getQuantity()
+                                        )
+                                );
+
+                BookingItem item =
+                        BookingItem.builder()
+                                .ticketTypeId(
+                                        ticketType.getTicketTypeId()
+                                )
+                                .ticketTypeNameSnapshot(
+                                        ticketType.getTicketTypeName()
+                                )
+                                .unitPrice(
+                                        ticketType.getPrice()
+                                )
+                                .quantity(
+                                        selection.getQuantity()
+                                )
+                                .subtotal(subtotal)
+                                .build();
+
+                booking.addItem(item);
+                totalAmount =
+                        totalAmount.add(subtotal);
+            }
+
+            booking.setTotalAmount(totalAmount);
+
+            Booking savedBooking =
+                    bookingRepository.save(booking);
+
+            Payment payment =
+                    simulatePayment(
+                            savedBooking,
+                            request.getPaymentMethod(),
+                            totalAmount
+                    );
+
+            paymentRepository.save(payment);
+
+            if (payment.getStatus() == PaymentStatus.FAILED) {
+
+                releaseRequestedTickets(request);
+
+                savedBooking.setStatus(
+                        BookingStatus.PENDING
+                );
+
+                savedBooking.setPayment(payment);
+
                 bookingRepository.save(savedBooking);
 
-        sendBookingConfirmedNotification(confirmedBooking);
+                throw new PaymentFailedException(
+                        "Payment failed for booking reference: "
+                                + savedBooking.getBookingReference()
+                );
+            }
 
-        return bookingMapper.toCreateBookingResponse(confirmedBooking);
+            savedBooking.setStatus(
+                    BookingStatus.CONFIRMED
+            );
+
+            savedBooking.setPayment(payment);
+
+            Booking confirmedBooking =
+                    bookingRepository.save(
+                            savedBooking
+                    );
+
+            idempotencyService.markCompleted(
+                    record.getId(),
+                    confirmedBooking.getId()
+            );
+
+            sendBookingConfirmedNotification(
+                    confirmedBooking
+            );
+
+            return bookingMapper
+                    .toCreateBookingResponse(
+                            confirmedBooking
+                    );
+
+        } catch (Exception ex) {
+
+            idempotencyService.markFailed(
+                    record.getId()
+            );
+
+            throw ex;
+        }
     }
 
     @Override
@@ -202,12 +314,54 @@ public class BookingServiceImpl implements BookingService {
         return bookingMapper.toBookingDetailResponse(booking);
     }
 
-    private void validateCreateRequest(String userId, CreateBookingRequest request) {
+    private void validateCreateRequest(
+            String userId,
+            CreateBookingRequest request
+    ) {
         if (userId == null || userId.isBlank()) {
-            throw new BadRequestException("Authenticated user id is required");
+            throw new BadRequestException(
+                    "Authenticated user id is required"
+            );
         }
-        if (request.getTicketSelections() == null || request.getTicketSelections().isEmpty()) {
-            throw new BadRequestException("At least one ticket selection is required");
+
+        if (request == null) {
+            throw new BadRequestException(
+                    "Booking request is required"
+            );
+        }
+
+        if (request.getTicketSelections() == null
+                || request.getTicketSelections().isEmpty()) {
+            throw new BadRequestException(
+                    "At least one ticket selection is required"
+            );
+        }
+
+        Set<Long> seenTicketTypeIds = new HashSet<>();
+
+        for (TicketSelectionRequest selection
+                : request.getTicketSelections()) {
+
+            if (selection.getTicketTypeId() == null) {
+                throw new BadRequestException(
+                        "Ticket type id is required"
+                );
+            }
+
+            if (selection.getQuantity() == null
+                    || selection.getQuantity() <= 0) {
+                throw new BadRequestException(
+                        "Each ticket quantity must be greater than zero"
+                );
+            }
+
+            if (!seenTicketTypeIds.add(
+                    selection.getTicketTypeId()
+            )) {
+                throw new BadRequestException(
+                        "Duplicate ticket type selections are not allowed"
+                );
+            }
         }
     }
 
@@ -227,25 +381,35 @@ public class BookingServiceImpl implements BookingService {
             CreateBookingRequest request,
             EventBookingInfoResponse eventInfo
     ) {
-        if (eventInfo.getTicketTypes() == null || eventInfo.getTicketTypes().isEmpty()) {
-            throw new ConflictException("No ticket types are available for this event");
+
+        if (eventInfo.getTicketTypes() == null
+                || eventInfo.getTicketTypes().isEmpty()) {
+            throw new ConflictException(
+                    "No ticket types are available for this event"
+            );
         }
 
-        Map<Long, EventTicketTypeResponse> ticketTypeMap = new HashMap<>();
-        for (EventTicketTypeResponse ticketType : eventInfo.getTicketTypes()) {
-            ticketTypeMap.put(ticketType.getTicketTypeId(), ticketType);
+        Map<Long, EventTicketTypeResponse> ticketTypeMap =
+                new HashMap<>();
+
+        for (EventTicketTypeResponse ticketType
+                : eventInfo.getTicketTypes()) {
+            ticketTypeMap.put(
+                    ticketType.getTicketTypeId(),
+                    ticketType
+            );
         }
 
-        Set<Long> seenTicketTypeIds = new HashSet<>();
-        for (TicketSelectionRequest selection : request.getTicketSelections()) {
-            if (selection.getQuantity() == null || selection.getQuantity() <= 0) {
-                throw new BadRequestException("Each ticket quantity must be greater than zero");
-            }
-            if (!seenTicketTypeIds.add(selection.getTicketTypeId())) {
-                throw new BadRequestException("Duplicate ticket type selections are not allowed");
-            }
-            if (!ticketTypeMap.containsKey(selection.getTicketTypeId())) {
-                throw new BadRequestException("Invalid ticket type requested: " + selection.getTicketTypeId());
+        for (TicketSelectionRequest selection
+                : request.getTicketSelections()) {
+
+            if (!ticketTypeMap.containsKey(
+                    selection.getTicketTypeId()
+            )) {
+                throw new BadRequestException(
+                        "Invalid ticket type requested: "
+                                + selection.getTicketTypeId()
+                );
             }
         }
 
@@ -482,4 +646,6 @@ public class BookingServiceImpl implements BookingService {
             throw new IllegalStateException("SHA-256 is not available", e);
         }
     }
+
+
 }
