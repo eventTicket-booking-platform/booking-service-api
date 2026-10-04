@@ -9,6 +9,7 @@ import com.ec7205.event_hub.booking_service_api.dto.response.EventBookingInfoRes
 import com.ec7205.event_hub.booking_service_api.dto.response.EventTicketTypeResponse;
 import com.ec7205.event_hub.booking_service_api.entity.Booking;
 import com.ec7205.event_hub.booking_service_api.entity.IdempotencyRecord;
+import com.ec7205.event_hub.booking_service_api.entity.OutboxEvent;
 import com.ec7205.event_hub.booking_service_api.entity.Payment;
 import com.ec7205.event_hub.booking_service_api.enums.BookingStatus;
 import com.ec7205.event_hub.booking_service_api.enums.IdempotencyStatus;
@@ -19,8 +20,11 @@ import com.ec7205.event_hub.booking_service_api.exception.PaymentFailedException
 import com.ec7205.event_hub.booking_service_api.mapper.BookingMapper;
 import com.ec7205.event_hub.booking_service_api.messaging.BookingNotificationEventPublisher;
 import com.ec7205.event_hub.booking_service_api.repository.BookingRepository;
+import com.ec7205.event_hub.booking_service_api.repository.OutboxEventRepository;
 import com.ec7205.event_hub.booking_service_api.repository.PaymentRepository;
 import com.ec7205.event_hub.booking_service_api.service.IdempotencyService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -28,6 +32,9 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -64,6 +71,12 @@ class BookingServiceImplTest {
 
     @Mock
     private IdempotencyService idempotencyService;
+
+    @Mock
+    private OutboxEventRepository outboxEventRepository;
+
+    @Mock
+    private ObjectMapper objectMapper;
 
     @InjectMocks
     private BookingServiceImpl bookingService;
@@ -1766,5 +1779,446 @@ class BookingServiceImplTest {
                         10L,
                         99L
                 );
+    }
+    @Test
+    void shouldCreateOutboxEventWhenBookingIsConfirmed() throws Exception {
+
+        IdempotencyRecord claimedRecord =
+                stubNewIdempotencyClaim();
+        Jwt jwt = Jwt.withTokenValue("test-token")
+                .header("alg", "none")
+                .claim("email", "user@test.com")
+                .claim("name", "Test User")
+                .claim("sub", "user-1")
+                .build();
+
+        JwtAuthenticationToken authentication =
+                new JwtAuthenticationToken(jwt);
+
+        SecurityContextHolder.getContext()
+                .setAuthentication(authentication);
+
+        EventTicketTypeResponse ticketType =
+                EventTicketTypeResponse.builder()
+                        .ticketTypeId(1L)
+                        .ticketTypeName("Standard")
+                        .price(BigDecimal.valueOf(2500))
+                        .build();
+
+        EventBookingInfoResponse eventInfo =
+                EventBookingInfoResponse.builder()
+                        .eventId(100L)
+                        .title("Test Event")
+                        .status("PUBLISHED")
+                        .startDateTime(LocalDateTime.now().plusDays(1))
+                        .ticketTypes(List.of(ticketType))
+                        .build();
+
+        CreateBookingRequest request =
+                CreateBookingRequest.builder()
+                        .eventId(100L)
+                        .ticketSelections(
+                                List.of(
+                                        TicketSelectionRequest.builder()
+                                                .ticketTypeId(1L)
+                                                .quantity(1)
+                                                .build()
+                                )
+                        )
+                        .paymentMethod(PaymentMethod.CARD)
+                        .build();
+
+        when(eventServiceClient.getEventBookingInfo(100L))
+                .thenReturn(eventInfo);
+
+        when(bookingRepository.save(any(Booking.class)))
+                .thenAnswer(invocation -> {
+                    Booking booking = invocation.getArgument(0);
+
+                    if (booking.getId() == null) {
+                        booking.setId(99L);
+                    }
+
+                    return booking;
+                });
+
+        when(paymentRepository.save(any(Payment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        when(objectMapper.writeValueAsString(any()))
+                .thenReturn("{\"bookingId\":\"BK-TEST\"}");
+
+        when(bookingMapper.toCreateBookingResponse(any(Booking.class)))
+                .thenReturn(
+                        CreateBookingResponse.builder()
+                                .bookingId(99L)
+                                .status(BookingStatus.CONFIRMED)
+                                .build()
+                );
+
+        bookingService.createBooking(
+                "user-1",
+                "new-key",
+                request
+        );
+
+        ArgumentCaptor<OutboxEvent> outboxCaptor =
+                ArgumentCaptor.forClass(OutboxEvent.class);
+
+        verify(outboxEventRepository)
+                .save(outboxCaptor.capture());
+
+        OutboxEvent savedOutbox =
+                outboxCaptor.getValue();
+
+        assertEquals(
+                "BOOKING_CONFIRMED",
+                savedOutbox.getEventType()
+        );
+
+        assertEquals(
+                "BOOKING",
+                savedOutbox.getAggregateType()
+        );
+
+        assertEquals(
+                "PENDING",
+                savedOutbox.getStatus()
+        );
+
+        assertEquals(
+                0,
+                savedOutbox.getRetryCount()
+        );
+
+        assertNotNull(
+                savedOutbox.getAggregateId()
+        );
+
+        verify(idempotencyService)
+                .markCompleted(
+                        claimedRecord.getId(),
+                        99L
+                );
+    }
+
+    @Test
+    void shouldNotCreateOutboxEventWhenPaymentFails() {
+
+        stubNewIdempotencyClaim();
+
+        EventTicketTypeResponse ticketType =
+                EventTicketTypeResponse.builder()
+                        .ticketTypeId(1L)
+                        .ticketTypeName("Standard")
+                        .price(BigDecimal.valueOf(2500))
+                        .build();
+
+        EventBookingInfoResponse eventInfo =
+                EventBookingInfoResponse.builder()
+                        .eventId(100L)
+                        .title("Test Event")
+                        .status("PUBLISHED")
+                        .startDateTime(LocalDateTime.now().plusDays(1))
+                        .ticketTypes(List.of(ticketType))
+                        .build();
+
+        CreateBookingRequest request =
+                CreateBookingRequest.builder()
+                        .eventId(100L)
+                        .ticketSelections(List.of(
+                                TicketSelectionRequest.builder()
+                                        .ticketTypeId(1L)
+                                        .quantity(1)
+                                        .build()
+                        ))
+                        .paymentMethod(PaymentMethod.SIMULATED_FAIL)
+                        .build();
+
+        when(eventServiceClient.getEventBookingInfo(100L))
+                .thenReturn(eventInfo);
+
+        when(bookingRepository.save(any(Booking.class)))
+                .thenAnswer(invocation -> {
+                    Booking booking = invocation.getArgument(0);
+
+                    if (booking.getId() == null) {
+                        booking.setId(99L);
+                    }
+
+                    return booking;
+                });
+
+        when(paymentRepository.save(any(Payment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThrows(
+                PaymentFailedException.class,
+                () -> bookingService.createBooking(
+                        "user-1",
+                        "new-key",
+                        request
+                )
+        );
+
+        verify(outboxEventRepository, never())
+                .save(any(OutboxEvent.class));
+
+        verify(eventServiceClient)
+                .releaseTickets(
+                        eq(100L),
+                        any(ReserveTicketsRequest.class)
+                );
+    }
+    @Test
+    void shouldNotCreateOutboxEventWhenJwtIsUnavailable() {
+
+        SecurityContextHolder.clearContext();
+
+        stubNewIdempotencyClaim();
+
+        EventTicketTypeResponse ticketType =
+                EventTicketTypeResponse.builder()
+                        .ticketTypeId(1L)
+                        .ticketTypeName("Standard")
+                        .price(BigDecimal.valueOf(2500))
+                        .build();
+
+        EventBookingInfoResponse eventInfo =
+                EventBookingInfoResponse.builder()
+                        .eventId(100L)
+                        .title("Test Event")
+                        .status("PUBLISHED")
+                        .startDateTime(LocalDateTime.now().plusDays(1))
+                        .ticketTypes(List.of(ticketType))
+                        .build();
+
+        CreateBookingRequest request =
+                CreateBookingRequest.builder()
+                        .eventId(100L)
+                        .ticketSelections(List.of(
+                                TicketSelectionRequest.builder()
+                                        .ticketTypeId(1L)
+                                        .quantity(1)
+                                        .build()
+                        ))
+                        .paymentMethod(PaymentMethod.CARD)
+                        .build();
+
+        when(eventServiceClient.getEventBookingInfo(100L))
+                .thenReturn(eventInfo);
+
+        when(bookingRepository.save(any(Booking.class)))
+                .thenAnswer(invocation -> {
+                    Booking booking = invocation.getArgument(0);
+
+                    if (booking.getId() == null) {
+                        booking.setId(99L);
+                    }
+
+                    return booking;
+                });
+
+        when(paymentRepository.save(any(Payment.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        when(bookingMapper.toCreateBookingResponse(any()))
+                .thenReturn(
+                        CreateBookingResponse.builder()
+                                .bookingId(99L)
+                                .status(BookingStatus.CONFIRMED)
+                                .build()
+                );
+
+        bookingService.createBooking(
+                "user-1",
+                "new-key",
+                request
+        );
+
+        verify(outboxEventRepository, never())
+                .save(any());
+    }
+    @Test
+    void shouldNotCreateOutboxEventWhenEmailIsUnavailable() {
+
+        Jwt jwt = Jwt.withTokenValue("test-token")
+                .header("alg", "none")
+                .claim("sub", "user-1")
+                .claim("name", "Test User")
+                .build();
+
+        SecurityContextHolder.getContext()
+                .setAuthentication(
+                        new JwtAuthenticationToken(jwt)
+                );
+
+        try {
+
+            stubNewIdempotencyClaim();
+
+            EventTicketTypeResponse ticketType =
+                    EventTicketTypeResponse.builder()
+                            .ticketTypeId(1L)
+                            .ticketTypeName("Standard")
+                            .price(BigDecimal.valueOf(2500))
+                            .build();
+
+            EventBookingInfoResponse eventInfo =
+                    EventBookingInfoResponse.builder()
+                            .eventId(100L)
+                            .title("Test Event")
+                            .status("PUBLISHED")
+                            .startDateTime(LocalDateTime.now().plusDays(1))
+                            .ticketTypes(List.of(ticketType))
+                            .build();
+
+            CreateBookingRequest request =
+                    CreateBookingRequest.builder()
+                            .eventId(100L)
+                            .ticketSelections(List.of(
+                                    TicketSelectionRequest.builder()
+                                            .ticketTypeId(1L)
+                                            .quantity(1)
+                                            .build()
+                            ))
+                            .paymentMethod(PaymentMethod.CARD)
+                            .build();
+
+            when(eventServiceClient.getEventBookingInfo(100L))
+                    .thenReturn(eventInfo);
+
+            when(bookingRepository.save(any(Booking.class)))
+                    .thenAnswer(invocation -> {
+                        Booking booking =
+                                invocation.getArgument(0);
+
+                        if (booking.getId() == null) {
+                            booking.setId(99L);
+                        }
+
+                        return booking;
+                    });
+
+            when(paymentRepository.save(any(Payment.class)))
+                    .thenAnswer(invocation ->
+                            invocation.getArgument(0));
+
+            when(bookingMapper.toCreateBookingResponse(any()))
+                    .thenReturn(
+                            CreateBookingResponse.builder()
+                                    .bookingId(99L)
+                                    .status(BookingStatus.CONFIRMED)
+                                    .build()
+                    );
+
+            bookingService.createBooking(
+                    "user-1",
+                    "new-key",
+                    request
+            );
+
+            verify(outboxEventRepository, never())
+                    .save(any());
+
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+    }
+    @Test
+    void shouldMarkIdempotencyFailedWhenOutboxSerializationFails()
+            throws Exception {
+
+        Jwt jwt = Jwt.withTokenValue("test-token")
+                .header("alg", "none")
+                .claim("sub", "user-1")
+                .claim("email", "user@test.com")
+                .claim("name", "Test User")
+                .build();
+
+        SecurityContextHolder.getContext()
+                .setAuthentication(
+                        new JwtAuthenticationToken(jwt)
+                );
+
+        try {
+
+            IdempotencyRecord claimedRecord =
+                    stubNewIdempotencyClaim();
+
+            EventTicketTypeResponse ticketType =
+                    EventTicketTypeResponse.builder()
+                            .ticketTypeId(1L)
+                            .ticketTypeName("Standard")
+                            .price(BigDecimal.valueOf(2500))
+                            .build();
+
+            EventBookingInfoResponse eventInfo =
+                    EventBookingInfoResponse.builder()
+                            .eventId(100L)
+                            .title("Test Event")
+                            .status("PUBLISHED")
+                            .startDateTime(LocalDateTime.now().plusDays(1))
+                            .ticketTypes(List.of(ticketType))
+                            .build();
+
+            CreateBookingRequest request =
+                    CreateBookingRequest.builder()
+                            .eventId(100L)
+                            .ticketSelections(List.of(
+                                    TicketSelectionRequest.builder()
+                                            .ticketTypeId(1L)
+                                            .quantity(1)
+                                            .build()
+                            ))
+                            .paymentMethod(PaymentMethod.CARD)
+                            .build();
+
+            when(eventServiceClient.getEventBookingInfo(100L))
+                    .thenReturn(eventInfo);
+
+            when(bookingRepository.save(any(Booking.class)))
+                    .thenAnswer(invocation -> {
+                        Booking booking =
+                                invocation.getArgument(0);
+
+                        if (booking.getId() == null) {
+                            booking.setId(99L);
+                        }
+
+                        return booking;
+                    });
+
+            when(paymentRepository.save(any(Payment.class)))
+                    .thenAnswer(invocation ->
+                            invocation.getArgument(0));
+
+            when(objectMapper.writeValueAsString(any()))
+                    .thenThrow(
+                            new JsonProcessingException(
+                                    "serialization failed"
+                            ) {}
+                    );
+
+            assertThrows(
+                    IllegalStateException.class,
+                    () -> bookingService.createBooking(
+                            "user-1",
+                            "new-key",
+                            request
+                    )
+            );
+
+            verify(idempotencyService)
+                    .markFailed(
+                            claimedRecord.getId()
+                    );
+
+            verify(outboxEventRepository, never())
+                    .save(any());
+
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
     }
 }

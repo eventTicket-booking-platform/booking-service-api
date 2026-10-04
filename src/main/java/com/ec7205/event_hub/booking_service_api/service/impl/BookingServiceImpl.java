@@ -12,10 +12,7 @@ import com.ec7205.event_hub.booking_service_api.dto.response.CreateBookingRespon
 import com.ec7205.event_hub.booking_service_api.dto.response.EventBookingInfoResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.EventTicketTypeResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.pagination.BookingPaginateResponseDto;
-import com.ec7205.event_hub.booking_service_api.entity.Booking;
-import com.ec7205.event_hub.booking_service_api.entity.BookingItem;
-import com.ec7205.event_hub.booking_service_api.entity.IdempotencyRecord;
-import com.ec7205.event_hub.booking_service_api.entity.Payment;
+import com.ec7205.event_hub.booking_service_api.entity.*;
 import com.ec7205.event_hub.booking_service_api.enums.BookingStatus;
 import com.ec7205.event_hub.booking_service_api.enums.IdempotencyStatus;
 import com.ec7205.event_hub.booking_service_api.enums.PaymentMethod;
@@ -29,9 +26,12 @@ import com.ec7205.event_hub.booking_service_api.mapper.BookingMapper;
 import com.ec7205.event_hub.booking_service_api.messaging.BookingNotificationEventPublisher;
 import com.ec7205.event_hub.booking_service_api.messaging.dto.BookingNotificationEvent;
 import com.ec7205.event_hub.booking_service_api.repository.BookingRepository;
+import com.ec7205.event_hub.booking_service_api.repository.OutboxEventRepository;
 import com.ec7205.event_hub.booking_service_api.repository.PaymentRepository;
 import com.ec7205.event_hub.booking_service_api.service.BookingService;
 import com.ec7205.event_hub.booking_service_api.service.IdempotencyService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -70,6 +70,8 @@ public class BookingServiceImpl implements BookingService {
     private final BookingNotificationEventPublisher bookingNotificationEventPublisher;
     private final BookingMapper bookingMapper;
     private final IdempotencyService idempotencyService;
+    private final OutboxEventRepository outboxEventRepository;
+    private final ObjectMapper objectMapper;
 
     @Override
     @Transactional(noRollbackFor = PaymentFailedException.class)
@@ -266,7 +268,7 @@ public class BookingServiceImpl implements BookingService {
                     confirmedBooking.getId()
             );
 
-            sendBookingConfirmedNotification(
+            createBookingConfirmedOutboxEvent(
                     confirmedBooking
             );
 
@@ -551,47 +553,6 @@ public class BookingServiceImpl implements BookingService {
         return isAdmin(userRole) || HOST_ROLE.equalsIgnoreCase(userRole);
     }
 
-    private void sendBookingConfirmedNotification(Booking booking) {
-        Jwt jwt = getCurrentJwt();
-        if (jwt == null) {
-            log.warn("Skipping notification because authenticated JWT is unavailable for booking {}", booking.getBookingReference());
-            return;
-        }
-
-        BookingConfirmedNotificationRequest request = BookingConfirmedNotificationRequest.builder()
-                .userId(booking.getUserId())
-                .email(resolveEmail(jwt))
-                .name(resolveDisplayName(jwt))
-                .bookingId(booking.getBookingReference())
-                .eventTitle(booking.getEventTitleSnapshot())
-                .bookingDate(String.valueOf(booking.getCreatedAt() != null ? booking.getCreatedAt() : LocalDateTime.now()))
-                .build();
-
-        if (request.getEmail() == null || request.getEmail().isBlank()) {
-            log.warn("Skipping notification because email is unavailable for booking {}", booking.getBookingReference());
-            return;
-        }
-
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("userId", request.getUserId());
-        payload.put("email", request.getEmail());
-        payload.put("name", request.getName());
-        payload.put("bookingId", request.getBookingId());
-        payload.put("eventTitle", request.getEventTitle());
-        payload.put("bookingDate", request.getBookingDate());
-
-        try {
-            bookingNotificationEventPublisher.publish(
-                    BookingNotificationEvent.builder()
-                            .type("BOOKING_CONFIRMED")
-                            .payload(payload)
-                            .build()
-            );
-        } catch (Exception ex) {
-            log.warn("Failed to send notification for booking {}: {}", booking.getBookingReference(), ex.getMessage());
-        }
-    }
-
     private Jwt getCurrentJwt() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication instanceof JwtAuthenticationToken jwtAuthenticationToken) {
@@ -647,5 +608,77 @@ public class BookingServiceImpl implements BookingService {
         }
     }
 
+    private void createBookingConfirmedOutboxEvent(
+            Booking booking
+    ) {
 
+        Jwt jwt = getCurrentJwt();
+
+        if (jwt == null) {
+            log.warn(
+                    "Skipping outbox notification creation because authenticated JWT is unavailable for booking {}",
+                    booking.getBookingReference()
+            );
+            return;
+        }
+
+        BookingConfirmedNotificationRequest request =
+                BookingConfirmedNotificationRequest.builder()
+                        .userId(booking.getUserId())
+                        .email(resolveEmail(jwt))
+                        .name(resolveDisplayName(jwt))
+                        .bookingId(booking.getBookingReference())
+                        .eventTitle(booking.getEventTitleSnapshot())
+                        .bookingDate(
+                                String.valueOf(
+                                        booking.getCreatedAt() != null
+                                                ? booking.getCreatedAt()
+                                                : LocalDateTime.now()
+                                )
+                        )
+                        .build();
+
+        if (request.getEmail() == null
+                || request.getEmail().isBlank()) {
+
+            log.warn(
+                    "Skipping outbox notification creation because email is unavailable for booking {}",
+                    booking.getBookingReference()
+            );
+
+            return;
+        }
+
+        Map<String, Object> payload = new HashMap<>();
+
+        payload.put("userId", request.getUserId());
+        payload.put("email", request.getEmail());
+        payload.put("name", request.getName());
+        payload.put("bookingId", request.getBookingId());
+        payload.put("eventTitle", request.getEventTitle());
+        payload.put("bookingDate", request.getBookingDate());
+
+        String payloadJson;
+
+        try {
+            payloadJson = objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException(
+                    "Failed to serialize booking notification payload",
+                    ex
+            );
+        }
+
+        OutboxEvent outboxEvent =
+                OutboxEvent.builder()
+                        .eventType("BOOKING_CONFIRMED")
+                        .aggregateType("BOOKING")
+                        .aggregateId(booking.getBookingReference())
+                        .payload(payloadJson)
+                        .status("PENDING")
+                        .retryCount(0)
+                        .build();
+
+        outboxEventRepository.save(outboxEvent);
+    }
 }
