@@ -12,6 +12,7 @@ import java.util.Map;
 @NoArgsConstructor
 @AllArgsConstructor
 public class BookingNotificationEvent {
+    private String eventId;
     private String type;
     private String correlationId;
     private Map<String, Object> payload;

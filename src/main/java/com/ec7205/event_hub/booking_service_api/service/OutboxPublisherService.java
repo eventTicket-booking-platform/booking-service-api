@@ -49,6 +49,7 @@ public class OutboxPublisherService {
 
                 publisher.publish(
                         BookingNotificationEvent.builder()
+                                .eventId(event.getId().toString())
                                 .type(event.getEventType())
                                 .correlationId(event.getCorrelationId())
                                 .payload(payload)
