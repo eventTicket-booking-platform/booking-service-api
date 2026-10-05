@@ -11,6 +11,7 @@ public interface BookingService {
     CreateBookingResponse createBooking(
             String userId,
             String idempotencyKey,
+            String correlationId,
             CreateBookingRequest request
     );
 

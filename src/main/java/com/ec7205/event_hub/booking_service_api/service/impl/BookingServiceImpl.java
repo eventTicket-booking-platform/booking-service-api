@@ -78,6 +78,7 @@ public class BookingServiceImpl implements BookingService {
     public CreateBookingResponse createBooking(
             String userId,
             String idempotencyKey,
+            String correlationId,
             CreateBookingRequest request
     ) {
         validateCreateRequest(userId, request);
@@ -269,7 +270,8 @@ public class BookingServiceImpl implements BookingService {
             );
 
             createBookingConfirmedOutboxEvent(
-                    confirmedBooking
+                    confirmedBooking,
+                    correlationId
             );
 
             return bookingMapper
@@ -609,7 +611,7 @@ public class BookingServiceImpl implements BookingService {
     }
 
     private void createBookingConfirmedOutboxEvent(
-            Booking booking
+            Booking booking,String correlationId
     ) {
 
         Jwt jwt = getCurrentJwt();
@@ -657,6 +659,7 @@ public class BookingServiceImpl implements BookingService {
         payload.put("bookingId", request.getBookingId());
         payload.put("eventTitle", request.getEventTitle());
         payload.put("bookingDate", request.getBookingDate());
+        payload.put("correlationId", correlationId);
 
         String payloadJson;
 
@@ -674,6 +677,7 @@ public class BookingServiceImpl implements BookingService {
                         .eventType("BOOKING_CONFIRMED")
                         .aggregateType("BOOKING")
                         .aggregateId(booking.getBookingReference())
+                        .correlationId(correlationId)
                         .payload(payloadJson)
                         .status("PENDING")
                         .retryCount(0)

@@ -133,7 +133,7 @@ class BookingServiceImplTest {
 
         // ACT
         CreateBookingResponse response =
-                bookingService.createBooking("user-1", "new-key",request);
+                bookingService.createBooking("user-1", "new-key", "test-correlation-id",request);
 
         // ASSERT
 
@@ -206,7 +206,7 @@ class BookingServiceImplTest {
 
         assertThrows(
                 ConflictException.class,
-                () -> bookingService.createBooking("user-1", "new-key",request)
+                () -> bookingService.createBooking("user-1", "new-key", "test-correlation-id",request)
         );
 
         verify(bookingRepository, never())
@@ -247,7 +247,7 @@ class BookingServiceImplTest {
 
         assertThrows(
                 ConflictException.class,
-                () -> bookingService.createBooking("user-1", "new-key",request)
+                () -> bookingService.createBooking("user-1", "new-key", "test-correlation-id",request)
         );
 
         verify(eventServiceClient, never())
@@ -288,7 +288,7 @@ class BookingServiceImplTest {
 
         assertThrows(
                 ConflictException.class,
-                () -> bookingService.createBooking("user-1", "new-key",request)
+                () -> bookingService.createBooking("user-1", "new-key", "test-correlation-id",request)
         );
 
         verify(eventServiceClient, never())
@@ -336,7 +336,7 @@ class BookingServiceImplTest {
 
         assertThrows(
                 BadRequestException.class,
-                () -> bookingService.createBooking("user-1", "new-key",request)
+                () -> bookingService.createBooking("user-1", "new-key", "test-correlation-id",request)
         );
 
         verify(eventServiceClient, never())
@@ -370,7 +370,7 @@ class BookingServiceImplTest {
                 () -> bookingService.createBooking(
                         "user-1",
                         "new-key",
-                        request
+                        "test-correlation-id",request
                 )
         );
 
@@ -422,7 +422,7 @@ class BookingServiceImplTest {
 
         assertThrows(
                 PaymentFailedException.class,
-                () -> bookingService.createBooking("user-1","new-key", request)
+                () -> bookingService.createBooking("user-1","new-key",  "test-correlation-id",request)
         );
 
         verify(eventServiceClient)
@@ -490,7 +490,7 @@ class BookingServiceImplTest {
 
         assertThrows(
                 PaymentFailedException.class,
-                () -> bookingService.createBooking("user-1", "new-key",request)
+                () -> bookingService.createBooking("user-1", "new-key", "test-correlation-id",request)
         );
 
         verify(eventServiceClient)
@@ -571,7 +571,7 @@ class BookingServiceImplTest {
                                 .build()
                 );
 
-        bookingService.createBooking("user-1", "new-key",request);
+        bookingService.createBooking("user-1", "new-key", "test-correlation-id",request);
 
         verify(eventServiceClient)
                 .reserveTickets(
@@ -662,7 +662,7 @@ class BookingServiceImplTest {
                 bookingService.createBooking(
                         "user-1",
                         "key-123",
-                        request
+                        "test-correlation-id",request
                 );
 
         assertEquals(
@@ -763,7 +763,7 @@ class BookingServiceImplTest {
         bookingService.createBooking(
                 "user-1",
                 "new-key",
-                request
+                "test-correlation-id",request
         );
 
         verify(eventServiceClient)
@@ -853,7 +853,7 @@ class BookingServiceImplTest {
         bookingService.createBooking(
                 "user-1",
                 "key-abc",
-                request
+                "test-correlation-id",request
         );
 
         ArgumentCaptor<Booking> bookingCaptor =
@@ -904,7 +904,7 @@ class BookingServiceImplTest {
                 () -> bookingService.createBooking(
                         "user-1",
                         "   ",
-                        request
+                        "test-correlation-id",request
                 )
         );
 
@@ -939,7 +939,7 @@ class BookingServiceImplTest {
                 () -> bookingService.createBooking(
                         "user-1",
                         null,
-                        request
+                        "test-correlation-id",request
                 )
         );
 
@@ -1016,7 +1016,7 @@ class BookingServiceImplTest {
         bookingService.createBooking(
                 "user-2",
                 "same-key",
-                request
+                "test-correlation-id",request
         );
 
         verify(idempotencyService)
@@ -1113,7 +1113,7 @@ class BookingServiceImplTest {
                 bookingService.createBooking(
                         "user-1",
                         "key-123",
-                        request
+                        "test-correlation-id",request
                 );
 
         assertEquals(
@@ -1163,7 +1163,7 @@ class BookingServiceImplTest {
                 () -> bookingService.createBooking(
                         "user-1",
                         "key-123",
-                        request
+                        "test-correlation-id",request
                 )
         );
 
@@ -1251,7 +1251,7 @@ class BookingServiceImplTest {
                 () -> bookingService.createBooking(
                         "user-1",
                         "key-123",
-                        request
+                        "test-correlation-id",request
                 )
         );
 
@@ -1331,7 +1331,7 @@ class BookingServiceImplTest {
                 bookingService.createBooking(
                         "user-1",
                         "key-123",
-                        request
+                        "test-correlation-id",request
                 );
 
         assertEquals(
@@ -1389,7 +1389,7 @@ class BookingServiceImplTest {
                 () -> bookingService.createBooking(
                         "user-1",
                         "key-123",
-                        request
+                        "test-correlation-id",request
                 )
         );
 
@@ -1479,7 +1479,7 @@ class BookingServiceImplTest {
         bookingService.createBooking(
                 "user-1",
                 "new-key",
-                request
+                "test-correlation-id",request
         );
 
         verify(idempotencyService)
@@ -1558,7 +1558,7 @@ class BookingServiceImplTest {
                 () -> bookingService.createBooking(
                         "user-1",
                         "new-key",
-                        request
+                        "test-correlation-id",request
                 )
         );
 
@@ -1716,7 +1716,7 @@ class BookingServiceImplTest {
                 bookingService.createBooking(
                         "user-1",
                         "same-key",
-                        request
+                        "test-correlation-id",request
                 );
 
                 return true;
@@ -1846,7 +1846,7 @@ class BookingServiceImplTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         when(objectMapper.writeValueAsString(any()))
-                .thenReturn("{\"bookingId\":\"BK-TEST\"}");
+                .thenReturn( "{\"bookingId\":\"BK-TEST\",\"correlationId\":\"test-correlation-id\"}");
 
         when(bookingMapper.toCreateBookingResponse(any(Booking.class)))
                 .thenReturn(
@@ -1859,7 +1859,7 @@ class BookingServiceImplTest {
         bookingService.createBooking(
                 "user-1",
                 "new-key",
-                request
+                "test-correlation-id",request
         );
 
         ArgumentCaptor<OutboxEvent> outboxCaptor =
@@ -1893,6 +1893,15 @@ class BookingServiceImplTest {
 
         assertNotNull(
                 savedOutbox.getAggregateId()
+        );
+
+        assertEquals(
+                "test-correlation-id",
+                savedOutbox.getCorrelationId()
+        );
+        assertTrue(
+                savedOutbox.getPayload()
+                        .contains("\"correlationId\":\"test-correlation-id\"")
         );
 
         verify(idempotencyService)
@@ -1957,7 +1966,7 @@ class BookingServiceImplTest {
                 () -> bookingService.createBooking(
                         "user-1",
                         "new-key",
-                        request
+                        "test-correlation-id",request
                 )
         );
 
@@ -2033,7 +2042,7 @@ class BookingServiceImplTest {
         bookingService.createBooking(
                 "user-1",
                 "new-key",
-                request
+                "test-correlation-id",request
         );
 
         verify(outboxEventRepository, never())
@@ -2115,7 +2124,7 @@ class BookingServiceImplTest {
             bookingService.createBooking(
                     "user-1",
                     "new-key",
-                    request
+                    "test-correlation-id",request
             );
 
             verify(outboxEventRepository, never())
@@ -2205,7 +2214,7 @@ class BookingServiceImplTest {
                     () -> bookingService.createBooking(
                             "user-1",
                             "new-key",
-                            request
+                            "test-correlation-id",request
                     )
             );
 

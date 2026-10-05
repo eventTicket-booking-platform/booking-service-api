@@ -44,6 +44,7 @@ class OutboxPublisherConcurrencyTest {
                 .eventType("BOOKING_CONFIRMED")
                 .aggregateType("BOOKING")
                 .aggregateId("BK-TEST-1")
+                .correlationId( "test-correlation-id")
                 .payload("""
                         {
                           "bookingId":"BK-TEST-1",
