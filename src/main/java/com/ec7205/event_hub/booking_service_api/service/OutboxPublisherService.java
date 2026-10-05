@@ -50,6 +50,7 @@ public class OutboxPublisherService {
                 publisher.publish(
                         BookingNotificationEvent.builder()
                                 .type(event.getEventType())
+                                .correlationId(event.getCorrelationId())
                                 .payload(payload)
                                 .build()
                 );
