@@ -46,6 +46,9 @@ public class OutboxEvent {
     @Column(name = "correlation_id", nullable = false, length = 100)
     private String correlationId;
 
+    @Column(name = "processing_started_at")
+    private LocalDateTime processingStartedAt;
+
     @PrePersist
     void prePersist() {
 

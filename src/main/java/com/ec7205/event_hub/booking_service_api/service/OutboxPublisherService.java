@@ -10,7 +10,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -22,20 +21,16 @@ import java.util.Map;
 public class OutboxPublisherService {
 
     private final OutboxEventRepository outboxEventRepository;
+    private final OutboxClaimService outboxClaimService;
     private final BookingNotificationEventPublisher publisher;
     private final ObjectMapper objectMapper;
     private static final int MAX_RETRIES = 3;
 
     @Scheduled(fixedDelay = 5000)
-    @Transactional
     public void publishPendingEvents() {
 
         List<OutboxEvent> events =
-                outboxEventRepository
-                        .findPendingEventsForUpdate("PENDING")
-                        .stream()
-                        .limit(50)
-                        .toList();
+                outboxClaimService.claimPendingEvents();
 
         for (OutboxEvent event : events) {
 
@@ -58,6 +53,7 @@ public class OutboxPublisherService {
 
                 event.setStatus("SENT");
                 event.setPublishedAt(LocalDateTime.now());
+                event.setProcessingStartedAt(null);
 
             } catch (Exception ex) {
 
@@ -68,7 +64,10 @@ public class OutboxPublisherService {
 
                 if (newRetryCount >= MAX_RETRIES) {
                     event.setStatus("FAILED");
+                } else {
+                    event.setStatus("PENDING");
                 }
+                event.setProcessingStartedAt(null);
 
                 log.warn(
                         "Failed to publish outbox event {} attempt {}/{}: {}",
@@ -78,6 +77,8 @@ public class OutboxPublisherService {
                         ex.getMessage()
                 );
             }
+
+            outboxEventRepository.saveAndFlush(event);
         }
     }
 }

@@ -114,5 +114,9 @@ class OutboxPublisherConcurrencyTest {
         assertNotNull(
                 event.getPublishedAt()
         );
+
+        assertNull(
+                event.getProcessingStartedAt()
+        );
     }
 }
