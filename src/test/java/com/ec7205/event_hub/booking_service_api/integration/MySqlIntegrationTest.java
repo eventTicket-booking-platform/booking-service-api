@@ -18,7 +18,9 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /** Opt-in *IT tests use real commits and independent connections, never H2 replacement. */
-@DataJpaTest(showSql = false)
+@DataJpaTest(showSql = false, properties = {
+        "spring.config.import=", "spring.cloud.config.enabled=false"
+})
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @ActiveProfiles("integration")
 @ContextConfiguration(classes = MySqlIntegrationTest.JpaConfiguration.class)
