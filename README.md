@@ -105,6 +105,67 @@ Default port: `9093`
 
 - The current backend exposes create, list, and detail endpoints. A booking cancel endpoint is not present in this service code.
 
+## Reservation expiry
+
+Payment is simulated **synchronously**: CARD, WALLET, BANK_TRANSFER and CASH
+immediately succeed; SIMULATED_FAIL fails. There is no asynchronous checkout or
+payment completion endpoint, so no artificial pending payment window is added.
+
+Previously, creation reserved inventory, saved the booking and payment, then
+confirmed success. A failed payment immediately released inventory but left a
+PENDING booking; a release exception rolled back that booking transaction and
+could leave Event Service inventory reserved without a recovery record.
+
+Now successful payment still immediately confirms, with no expiry timestamp.
+Failed payment still attempts immediate release, using the booking reference as
+the stable `releaseId` on the existing release endpoint. Successful compensation
+sets CANCELLED with no expiry. If release throws, the existing
+`noRollbackFor = PaymentFailedException` commits the failed payment and PENDING
+booking, its exact BookingItem quantities and `reservationExpiresAt`; the request
+still returns the existing payment-failure response and its idempotency record
+is FAILED. Reusing that request key remains rejected.
+
+Configure the positive ISO-8601 duration
+`eventhub.booking.reservation-timeout=PT10M` or `BOOKING_RESERVATION_TIMEOUT`
+(default ten minutes). It starts at failed-payment compensation and is stored
+only while inventory release is outstanding. Every thirty seconds,
+`ReservationExpiryScheduler` selects up to fifty expired PENDING bookings.
+`eventhub.booking.reservation-expiry-poll-ms` can override that poll interval.
+Each booking runs in its own transaction with a pessimistic row lock and a fresh
+eligibility/payment check. CONFIRMED, CANCELLED and EXPIRED rows, missing/future
+expiries and payments with SUCCESS, REFUNDED or a paidAt timestamp are untouched.
+Release sends the persisted ticket IDs and quantities. Only after release
+succeeds does the booking become EXPIRED and its timestamp clear. Failures leave
+it eligible for later retry and do not prevent the remaining batch from running.
+
+Event Service stores a release receipt and inventory increments in one local
+transaction. Repeating the same release ID and quantities succeeds without
+incrementing inventory again, including after a lost HTTP response or failed
+Booking Service commit. Different quantities for that ID are rejected. Deploy
+Event Service's release-id support **before** this Booking Service version.
+Existing callers without a release ID remain compatible but have no deduplication.
+
+With the existing `ddl-auto=update`, Hibernate adds nullable
+`bookings.reservation_expires_at`; otherwise add a nullable DATETIME(6) column
+before deployment. No timestamp is backfilled: old PENDING rows may already
+have released inventory and cannot safely be inferred to hold reservations.
+Event Service also needs its `ticket_releases` table (see its README).
+
+This is failed-compensation recovery, not a distributed transaction. A crash or
+database failure after remote reserve but before the local booking/payment
+transaction commits can still leave an orphan reservation; this mechanism cannot
+infer whether an unrecorded remote operation succeeded. Future asynchronous
+payment completion must lock the booking and reject expired reservations before
+charging. Current workers must have reasonably synchronized clocks. Database
+locks span the release HTTP call, releases for one event serialize, and a batch
+of fifty persistently failing rows can delay later rows. Release receipts must
+be retained while a retry remains possible.
+
+`ReservationExpiryTest` covers expiry, exact quantities, paid/confirmed guards,
+repeat and concurrent expiry, real rollback/retry and configured-timeout creation
+after failed compensation. Scheduler tests cover continuing after a failure.
+Run `mvn test` with Java 17+; these persistence tests use H2, not production MySQL.
+
 ## Stale outbox recovery
 
 A worker can crash after committing its outbox claim and leave an event in
