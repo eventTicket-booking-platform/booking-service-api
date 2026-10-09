@@ -14,6 +14,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.OptimisticLockingFailureException;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -247,6 +248,21 @@ class OutboxPublisherServiceTest {
                 .saveAndFlush(first);
         verify(outboxEventRepository)
                 .saveAndFlush(second);
+    }
+
+    @Test
+    void shouldContinueWhenRecoveredClaimRejectsLateWorkerSave() throws Exception {
+        OutboxEvent first = claimedEvent(1L, "{}", 0);
+        OutboxEvent second = claimedEvent(2L, "{}", 0);
+        when(outboxClaimService.claimPendingEvents()).thenReturn(List.of(first, second));
+        when(objectMapper.readValue(anyString(), any(TypeReference.class))).thenReturn(Map.of());
+        when(outboxEventRepository.saveAndFlush(first))
+                .thenThrow(new OptimisticLockingFailureException("Claim recovered"));
+
+        assertDoesNotThrow(() -> outboxPublisherService.publishPendingEvents());
+
+        verify(outboxEventRepository).saveAndFlush(second);
+        verify(publisher, times(2)).publish(any(BookingNotificationEvent.class));
     }
 
     private OutboxEvent claimedEvent(

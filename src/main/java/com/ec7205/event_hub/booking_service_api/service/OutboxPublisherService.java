@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -78,7 +79,13 @@ public class OutboxPublisherService {
                 );
             }
 
-            outboxEventRepository.saveAndFlush(event);
+            try {
+                outboxEventRepository.saveAndFlush(event);
+            } catch (OptimisticLockingFailureException ex) {
+                // A recovered claim belongs to a newer worker; never overwrite its state.
+                log.warn("Outbox event {} claim changed before completion; ignoring stale worker result",
+                        event.getId());
+            }
         }
     }
 }

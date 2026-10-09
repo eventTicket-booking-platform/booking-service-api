@@ -18,6 +18,11 @@ public class OutboxEvent {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    // Recovery invalidates a detached worker's claim before another worker retries it.
+    @Version
+    @Column(nullable = false, columnDefinition = "bigint default 0")
+    private long version;
+
     @Column(name = "event_type", nullable = false, length = 100)
     private String eventType;
 

@@ -8,11 +8,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.Duration;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.any;
 
 @ExtendWith(MockitoExtension.class)
 class OutboxClaimServiceTest {
@@ -44,6 +47,10 @@ class OutboxClaimServiceTest {
         assertSame(event, claimedEvents.get(0));
         assertEquals("PROCESSING", event.getStatus());
         assertNotNull(event.getProcessingStartedAt());
+
+        var order = inOrder(outboxEventRepository);
+        order.verify(outboxEventRepository).recoverStaleProcessingEvents(any());
+        order.verify(outboxEventRepository).findPendingEventsForUpdate("PENDING");
     }
 
     @Test
@@ -56,5 +63,14 @@ class OutboxClaimServiceTest {
                 outboxClaimService.claimPendingEvents();
 
         assertTrue(claimedEvents.isEmpty());
+    }
+
+    @Test
+    void shouldRejectNonPositiveTimeoutBeforeTouchingClaims() {
+        for (Duration timeout : List.of(Duration.ZERO, Duration.ofSeconds(-1))) {
+            ReflectionTestUtils.setField(outboxClaimService, "processingTimeout", timeout);
+            assertThrows(IllegalStateException.class, outboxClaimService::claimPendingEvents);
+        }
+        verifyNoInteractions(outboxEventRepository);
     }
 }
