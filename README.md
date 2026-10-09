@@ -248,3 +248,9 @@ necessary, and an external email send followed by a crash before recording its
 processed event can still produce duplicate emails. Claims with missing timestamps
 require investigation rather than automatic recovery. Recovery relies on reasonably
 synchronized worker clocks and scans matching rows without a bounded recovery batch.
+
+## How to run integration tests
+
+Run `mvn test` for the existing tests without Docker. With Docker running Linux containers, run `mvn verify -Pintegration-tests` to also run the opt-in `*IT` Testcontainers tests. Images are downloaded on first use; connection addresses and ports come from the containers. The integration profile fails if Docker is unavailable.
+
+MySQL coverage: concurrent user/idempotency-key uniqueness on bookings and claim records, plus stale outbox recovery and optimistic locking. RabbitMQ coverage: the production notification publisher confirms and routes an event to the booking queue.
