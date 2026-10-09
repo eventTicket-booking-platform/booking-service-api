@@ -555,7 +555,14 @@ public class BookingServiceImpl implements BookingService {
     }
 
     private void assertOwnerOrAdminOrHost(Booking booking, String userId, String userRole) {
-        if (isAdminOrHost(userRole)) {
+        if (isAdmin(userRole)) {
+            return;
+        }
+        if (HOST_ROLE.equalsIgnoreCase(userRole)) {
+            EventBookingInfoResponse event = eventServiceClient.getEventBookingInfo(booking.getEventId());
+            if (userId == null || userId.isBlank() || event == null || !userId.equals(event.getCreatedBy())) {
+                throw new UnauthorizedActionException("You do not own this booking's event");
+            }
             return;
         }
         assertOwnerOrAdmin(booking, userId, userRole);
@@ -563,10 +570,6 @@ public class BookingServiceImpl implements BookingService {
 
     private boolean isAdmin(String userRole) {
         return ADMIN_ROLE.equalsIgnoreCase(userRole);
-    }
-
-    private boolean isAdminOrHost(String userRole) {
-        return isAdmin(userRole) || HOST_ROLE.equalsIgnoreCase(userRole);
     }
 
     private Jwt getCurrentJwt() {

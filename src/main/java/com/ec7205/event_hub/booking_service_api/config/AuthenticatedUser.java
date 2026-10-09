@@ -20,8 +20,9 @@ public record AuthenticatedUser(String userId, String role) {
                 .map(GrantedAuthority::getAuthority)
                 .map(AuthenticatedUser::normalizeRole)
                 .filter(AuthenticatedUser::isBusinessRole)
+                .sorted(java.util.Comparator.comparingInt(roleName -> ADMIN_ROLE.equals(roleName) ? 0 : 1))
                 .findFirst()
-                .orElse("USER");
+                .orElse("CUSTOMER");
 
         return new AuthenticatedUser(jwt.getSubject(), role);
     }
@@ -30,7 +31,7 @@ public record AuthenticatedUser(String userId, String role) {
         if (authority == null || authority.isBlank()) {
             return "USER";
         }
-        return authority.startsWith("ROLE_") ? authority.substring(5) : authority.toUpperCase();
+        return authority.toUpperCase(java.util.Locale.ROOT).replaceFirst("^ROLE_", "");
     }
 
     private static boolean isBusinessRole(String role) {

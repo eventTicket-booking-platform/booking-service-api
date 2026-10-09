@@ -58,11 +58,38 @@ Internal endpoints:
 
 ## Role-Based Access
 
-- `permitAll`: `/bookings/internal/**`
-- `admin`, `host`: `/admin/**`
-- any authenticated user: booking creation and own booking views
+- ADMIN: platform-wide booking details, lists, statistics and user-email lookup.
+- HOST: booking details, lists and statistics only for events owned by that host.
+- CUSTOMER (including legacy `user` role): own booking details/history and normal
+  booking creation; administrative lists/statistics are forbidden.
 
-Access to individual booking detail is finalized in service logic using the authenticated user ID and role.
+HOST no longer bypasses detail authorization. Details check `createdBy` from
+Event Service's existing booking-info API against the authenticated JWT subject.
+Lists and aggregates use the authenticated `events/admin/owned-ids` API, forwarding
+the same bearer token; Event Service derives ownership itself. Filtering applies
+before database pagination/counting and revenue aggregation. Explicit foreign
+event IDs return 403; a host with no events receives empty lists/zero statistics.
+An upstream ownership failure never falls back to global data. `/admin/stats`
+accepts optional `eventId` to narrow scope. ADMIN takes precedence in multi-role
+JWTs; uppercase realm roles and legacy lowercase roles are supported.
+
+Direct internal booking-count requests require ADMIN or the owning HOST; the
+gateway blocks external forwarding of that internal route. Non-owners use the
+existing 403 response; unauthenticated requests use existing authentication.
+Platform-wide user lists and email resolution are ADMIN-only in Auth Service;
+HOST email lookup filters are rejected. The single Angular dashboard adapts
+navigation and requests by role, while the backend enforces these restrictions.
+
+Deploy Event Service's owned-ID API and `createdBy` response first and audit
+historical ownership (older creation trusted clients). No cross-service database
+access/foreign keys are used. The simple owned-ID list/SQL IN query may need
+paging for very large hosts; internal inventory and notification backends still
+require a private service network.
+
+`BookingOwnershipTest` verifies scoped lists/counts/revenue, cross-host denial,
+ADMIN access, empty scopes, upstream failure and customer own-booking access.
+`BookingAuthorizationHttpTest` verifies HTTP 401/403, direct internal count
+ownership and caller-token propagation. Run `mvn test` with Java 17+ (H2 tests).
 
 ## Runtime Dependencies
 

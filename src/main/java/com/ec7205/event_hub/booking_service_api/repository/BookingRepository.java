@@ -40,6 +40,10 @@ public interface BookingRepository extends JpaRepository<Booking, Long>, JpaSpec
     @Query("select coalesce(sum(b.totalAmount), 0) from Booking b where b.status = :status")
     BigDecimal sumTotalAmountByStatus(@Param("status") BookingStatus status);
 
+    @Query("select coalesce(sum(b.totalAmount), 0) from Booking b where b.status = :status and b.eventId in :eventIds")
+    BigDecimal sumTotalAmountByStatusAndEventIdIn(@Param("status") BookingStatus status,
+                                                @Param("eventIds") List<Long> eventIds);
+
     Optional<Booking> findByUserIdAndIdempotencyKey(
             String userId,
             String idempotencyKey

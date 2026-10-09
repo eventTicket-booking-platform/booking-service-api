@@ -22,6 +22,10 @@ import java.util.stream.Collectors;
 @Slf4j
 @RestControllerAdvice
 public class AppWideExceptionHandler {
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<StandardResponseDto> handleAccessDenied(org.springframework.security.access.AccessDeniedException ex) {
+        return new ResponseEntity<>(new StandardResponseDto(403, ex.getMessage(), null), HttpStatus.FORBIDDEN);
+    }
 //    @ExceptionHandler(EntryNotFoundException.class)
 //    public ResponseEntity<StandardResponseDto> handleEntryNotFoundException(EntryNotFoundException ex) {
 //        return new ResponseEntity<StandardResponseDto>(

@@ -46,8 +46,10 @@ public class AdminBookingController {
     }
 
     @GetMapping("/stats")
-    public ResponseEntity<BookingStatsResponse> getBookingStats(Authentication authentication) {
+    public ResponseEntity<BookingStatsResponse> getBookingStats(Authentication authentication,
+            @RequestHeader("Authorization") String authorizationHeader,
+            @RequestParam(required = false) Long eventId) {
         AuthenticatedUser user = AuthenticatedUser.from(authentication);
-        return ResponseEntity.ok(adminBookingService.getBookingStats(user.role()));
+        return ResponseEntity.ok(adminBookingService.getBookingStats(user.role(), authorizationHeader, eventId));
     }
 }

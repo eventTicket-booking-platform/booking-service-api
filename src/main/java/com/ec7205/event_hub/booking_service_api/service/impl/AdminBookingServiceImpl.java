@@ -1,6 +1,7 @@
 package com.ec7205.event_hub.booking_service_api.service.impl;
 
 import com.ec7205.event_hub.booking_service_api.client.AuthServiceClient;
+import com.ec7205.event_hub.booking_service_api.client.EventServiceClient;
 import com.ec7205.event_hub.booking_service_api.dto.response.AdminBookingSummaryResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.BookingStatsResponse;
 import com.ec7205.event_hub.booking_service_api.dto.response.pagination.AdminBookingPaginateResponseDto;
@@ -19,6 +20,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.List;
+import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
@@ -30,6 +33,7 @@ public class AdminBookingServiceImpl implements AdminBookingService {
     private final BookingRepository bookingRepository;
     private final BookingMapper bookingMapper;
     private final AuthServiceClient authServiceClient;
+    private final EventServiceClient eventServiceClient;
 
     @Override
     @Transactional(readOnly = true)
@@ -44,8 +48,13 @@ public class AdminBookingServiceImpl implements AdminBookingService {
     ) {
         assertAdminOrHost(userRole);
 
+        List<Long> scope = eventScope(userRole, authorizationHeader, eventId);
+        if (HOST_ROLE.equalsIgnoreCase(userRole) && userEmail != null && !userEmail.isBlank()) {
+            throw new UnauthorizedActionException("User email lookup is restricted to admins");
+        }
+
         String resolvedUserId = resolveUserIdFilter(authorizationHeader, userId, userEmail);
-        Specification<Booking> specification = Specification.where(null);
+        Specification<Booking> specification = withinEvents(scope);
 
         if (status != null) {
             specification = specification.and((root, query, cb) -> cb.equal(root.get("status"), status));
@@ -68,8 +77,21 @@ public class AdminBookingServiceImpl implements AdminBookingService {
 
     @Override
     @Transactional(readOnly = true)
-    public BookingStatsResponse getBookingStats(String userRole) {
+    public BookingStatsResponse getBookingStats(String userRole, String authorizationHeader, Long eventId) {
         assertAdminOrHost(userRole);
+
+        List<Long> scope = eventScope(userRole, authorizationHeader, eventId);
+        if (scope != null) {
+            Specification<Booking> eligible = withinEvents(scope);
+            return BookingStatsResponse.builder()
+                    .totalBookings(bookingRepository.count(eligible))
+                    .confirmedBookings(countStatus(eligible, BookingStatus.CONFIRMED))
+                    .cancelledBookings(countStatus(eligible, BookingStatus.CANCELLED))
+                    .pendingBookings(countStatus(eligible, BookingStatus.PENDING))
+                    .totalRevenue(scope.isEmpty() ? BigDecimal.ZERO
+                            : bookingRepository.sumTotalAmountByStatusAndEventIdIn(BookingStatus.CONFIRMED, scope))
+                    .build();
+        }
 
         long totalBookings = bookingRepository.count();
         long confirmedBookings = bookingRepository.countByStatus(BookingStatus.CONFIRMED);
@@ -84,6 +106,27 @@ public class AdminBookingServiceImpl implements AdminBookingService {
                 .pendingBookings(pendingBookings)
                 .totalRevenue(totalRevenue)
                 .build();
+    }
+
+    private long countStatus(Specification<Booking> scope, BookingStatus status) {
+        return bookingRepository.count(scope.and((root, query, cb) -> cb.equal(root.get("status"), status)));
+    }
+
+    private Specification<Booking> withinEvents(List<Long> scope) {
+        return (root, query, cb) -> scope == null ? cb.conjunction()
+                : scope.isEmpty() ? cb.disjunction() : root.get("eventId").in(scope);
+    }
+
+    private List<Long> eventScope(String role, String authorizationHeader, Long eventId) {
+        if (ADMIN_ROLE.equalsIgnoreCase(role)) {
+            return eventId == null ? null : List.of(eventId);
+        }
+        // Forward the caller's JWT; Event Service derives the owner from its subject.
+        List<Long> owned = Objects.requireNonNull(eventServiceClient.getOwnedEventIds(authorizationHeader));
+        if (eventId != null && !owned.contains(eventId)) {
+            throw new UnauthorizedActionException("You do not own this event");
+        }
+        return eventId == null ? owned : List.of(eventId);
     }
 
     private void assertAdminOrHost(String userRole) {

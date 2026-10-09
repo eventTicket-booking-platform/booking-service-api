@@ -18,5 +18,5 @@ public interface AdminBookingService {
             Pageable pageable
     );
 
-    BookingStatsResponse getBookingStats(String userRole);
+    BookingStatsResponse getBookingStats(String userRole, String authorizationHeader, Long eventId);
 }
