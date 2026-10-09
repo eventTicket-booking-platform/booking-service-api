@@ -379,7 +379,7 @@ class BookingServiceImplTest {
     }
 
     @Test
-    void shouldKeepBookingPendingWhenPaymentFails() {
+    void shouldCancelBookingWhenFailedPaymentTicketsAreReleased() {
         stubNewIdempotencyClaim();
         EventTicketTypeResponse ticketType =
                 EventTicketTypeResponse.builder()
@@ -441,9 +441,10 @@ class BookingServiceImplTest {
                 bookingCaptor.getValue();
 
         assertEquals(
-                BookingStatus.PENDING,
+                BookingStatus.CANCELLED,
                 savedBooking.getStatus()
         );
+        assertNull(savedBooking.getReservationExpiresAt());
     }
 
     @Test

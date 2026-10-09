@@ -9,5 +9,6 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 public class ReserveTicketsRequest {
+    private String releaseId;
     private List<TicketReservationRequest> tickets;
 }

@@ -35,6 +35,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.core.Authentication;
@@ -52,6 +53,7 @@ import java.util.stream.Collectors;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
@@ -73,6 +75,9 @@ public class BookingServiceImpl implements BookingService {
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
 
+    @Value("${eventhub.booking.reservation-timeout:PT10M}")
+    private Duration reservationTimeout = Duration.ofMinutes(10);
+
     @Override
     @Transactional(noRollbackFor = PaymentFailedException.class)
     public CreateBookingResponse createBooking(
@@ -82,6 +87,9 @@ public class BookingServiceImpl implements BookingService {
             CreateBookingRequest request
     ) {
         validateCreateRequest(userId, request);
+        if (reservationTimeout.isZero() || reservationTimeout.isNegative()) {
+            throw new IllegalStateException("Reservation timeout must be positive");
+        }
 
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new BadRequestException(
@@ -236,14 +244,19 @@ public class BookingServiceImpl implements BookingService {
             paymentRepository.save(payment);
 
             if (payment.getStatus() == PaymentStatus.FAILED) {
-
-                releaseRequestedTickets(request);
-
-                savedBooking.setStatus(
-                        BookingStatus.PENDING
-                );
-
                 savedBooking.setPayment(payment);
+                savedBooking.setReservationExpiresAt(LocalDateTime.now().plus(reservationTimeout));
+
+                try {
+                    releaseRequestedTickets(request, savedBooking.getBookingReference());
+                    savedBooking.setStatus(BookingStatus.CANCELLED);
+                    savedBooking.setReservationExpiresAt(null);
+                } catch (Exception releaseFailure) {
+                    // Commit the unpaid booking via PaymentFailedException's noRollbackFor
+                    // so the scheduler can retry compensation using the same release ID.
+                    log.warn("Inventory release pending for booking {}: {}",
+                            savedBooking.getBookingReference(), releaseFailure.getMessage());
+                }
 
                 bookingRepository.save(savedBooking);
 
@@ -457,7 +470,7 @@ public class BookingServiceImpl implements BookingService {
         );
     }
 
-    private void releaseRequestedTickets(CreateBookingRequest request) {
+    private void releaseRequestedTickets(CreateBookingRequest request, String releaseId) {
 
         List<TicketReservationRequest> tickets =
                 request.getTicketSelections().stream()
@@ -471,6 +484,7 @@ public class BookingServiceImpl implements BookingService {
 
         ReserveTicketsRequest releaseRequest =
                 ReserveTicketsRequest.builder()
+                        .releaseId(releaseId)
                         .tickets(tickets)
                         .build();
 

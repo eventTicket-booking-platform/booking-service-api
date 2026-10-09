@@ -62,6 +62,9 @@ public class Booking {
     @Column(nullable = false, length = 32, columnDefinition = "varchar(32)")
     private BookingStatus status;
 
+    // Non-null only while an unpaid reservation still needs inventory release.
+    private LocalDateTime reservationExpiresAt;
+
     @Column(nullable = false, precision = 12, scale = 2)
     private BigDecimal totalAmount;
 
