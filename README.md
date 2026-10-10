@@ -256,3 +256,11 @@ synchronized worker clocks and scans matching rows without a bounded recovery ba
 Run `mvn test` for the existing tests without Docker. With Docker running Linux containers, run `mvn verify -Pintegration-tests` to also run the opt-in `*IT` Testcontainers tests. Images are downloaded on first use; connection addresses and ports come from the containers. The integration profile fails if Docker is unavailable.
 
 MySQL coverage: concurrent user/idempotency-key uniqueness on bookings and claim records, plus stale outbox recovery and optimistic locking. RabbitMQ coverage: the production notification publisher confirms and routes an event to the booking queue.
+
+## Local k6 checks
+
+[performance/README.md](performance/README.md) documents moderate-load inventory
+contention and same-user/key/body booking replays, including a changed-body conflict.
+It includes the actual gateway API, JWT setup, environment variables, run commands
+and database evidence queries. Script available; final metrics pending execution.
+These checks do not establish production capacity.
