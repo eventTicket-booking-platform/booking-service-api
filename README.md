@@ -238,7 +238,9 @@ mvn test
 non-processing rows, configured-timeout reclaiming, repeat recovery, and rejection
 of late worker writes. Existing publisher and two-worker tests cover the normal
 publication flow; a publisher unit test checks continuation after a stale save.
-MySQL/Testcontainers validation belongs to the planned integration-test phase.
+The opt-in MySQL Testcontainers tests below cover stale recovery and optimistic
+version protection. They compile, but the recorded local execution could not
+start containers because Docker was unavailable; no MySQL pass is claimed.
 
 This remains **at-least-once publication**, not exactly-once processing. A worker
 may publish before crashing or before its claim expires, and recovery can publish
